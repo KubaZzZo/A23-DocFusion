@@ -1,5 +1,6 @@
 """新闻爬虫管理面板"""
 import asyncio
+from uuid import uuid4
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QCheckBox, QSpinBox, QProgressBar, QTableWidget, QTableWidgetItem,
@@ -8,10 +9,11 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from crawler.news_spider import NewsSpider, NEWS_SOURCES
 from crawler.doc_generator import DocGenerator
+from crawler.doc_generator import _safe_filename
 from db.database import CrawledArticleDAO, DocumentDAO, EntityDAO
 from core.document_parser import DocumentParser
 from core.entity_extractor import EntityExtractor
-from config import UPLOAD_DIR
+from config import CRAWLED_DIR
 from logger import get_logger
 import shutil
 from pathlib import Path
@@ -97,10 +99,15 @@ class ImportWorker(QThread):
                 # 同时存入 Document 表并提取实体
                 content = a.get("content", "")
                 if content:
+                    title = a.get("title", "article")
+                    digest = uuid4().hex[:8]
+                    filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
+                    file_path = CRAWLED_DIR / filename
+                    file_path.write_text(content, encoding="utf-8")
                     doc = DocumentDAO.create(
-                        filename=f"crawled_{a.get('title', 'article')[:30]}.txt",
+                        filename=filename,
                         file_type="txt",
-                        file_path="crawled"
+                        file_path=str(file_path)
                     )
                     DocumentDAO.update_text(doc.id, content)
                     loop = asyncio.new_event_loop()

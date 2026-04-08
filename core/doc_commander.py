@@ -7,6 +7,7 @@ from docx import Document as DocxDocument
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from llm import get_llm
+from llm.base import strip_json_code_fence
 from config import DATA_DIR
 
 BACKUP_DIR = DATA_DIR / "backups"
@@ -50,16 +51,16 @@ class DocCommander:
         ]
         result = await self.llm.chat(messages)
         try:
-            cleaned = result.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[1]
-                cleaned = cleaned.rsplit("```", 1)[0]
+            cleaned = strip_json_code_fence(result)
             return json.loads(cleaned)
         except json.JSONDecodeError:
             return {"error": "指令解析失败", "raw": result}
 
     def execute(self, doc_path: str, command: dict) -> dict:
         """执行操作指令（自动备份原文件）"""
+        if Path(doc_path).suffix.lower() != ".docx":
+            return {"success": False, "message": "文档智能操作目前仅支持 .docx 格式"}
+
         action = command.get("action")
         handlers = {
             "format": self._handle_format,
