@@ -165,6 +165,10 @@ class ExtractPanel(QWidget):
         self.btn_extract.setEnabled(False)
         action_bar = QHBoxLayout()
         action_bar.addWidget(self.btn_extract)
+        self.btn_reextract = QPushButton("清除并重新提取")
+        self.btn_reextract.clicked.connect(self._clear_and_reextract)
+        self.btn_reextract.setEnabled(False)
+        action_bar.addWidget(self.btn_reextract)
         self.btn_export_csv = QPushButton("导出CSV")
         self.btn_export_csv.clicked.connect(lambda: self._export_entities("csv"))
         self.btn_export_csv.setEnabled(False)
@@ -258,6 +262,7 @@ class ExtractPanel(QWidget):
         self.lbl_doc_info.setText(f"ID:{doc.id}  |  {suffix.upper()}  |  {char_count} 字  |  {line_count} 行")
         self.txt_content.setPlainText(text)
         self.btn_extract.setEnabled(True)
+        self.btn_reextract.setEnabled(True)
         self.entity_table.setRowCount(0)
         self.current_entities = []
         self._set_export_enabled(False)
@@ -275,6 +280,7 @@ class ExtractPanel(QWidget):
         self.btn_open.setEnabled(False)
         self.btn_batch.setEnabled(False)
         self.btn_extract.setEnabled(False)
+        self.btn_reextract.setEnabled(False)
         self.btn_batch.setText("批量提取中...")
         self.lbl_file.setText(f"批量处理 {len(paths)} 个文件")
         self.lbl_doc_info.setText("")
@@ -305,6 +311,7 @@ class ExtractPanel(QWidget):
             text = self.current_doc.raw_text
 
         self.btn_extract.setEnabled(False)
+        self.btn_reextract.setEnabled(False)
         self.btn_extract.setText("提取中...")
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
@@ -313,6 +320,28 @@ class ExtractPanel(QWidget):
         self.worker.finished.connect(self._on_extract_done)
         self.worker.error.connect(self._on_extract_error)
         self.worker.start()
+
+    def _clear_and_reextract(self):
+        if not self.current_doc:
+            QMessageBox.warning(self, "提示", "请先选择一个文档")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "确认重新提取",
+            "将删除当前文档已有实体并重新提取，是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        EntityDAO.delete_by_document(self.current_doc.id)
+        self.current_entities = []
+        self.entity_table.setRowCount(0)
+        self.stats_bar_widget.setVisible(False)
+        self._set_export_enabled(False)
+        self._start_extract()
 
     def _render_entities(self, entities: list[dict]):
         self._update_stats_bar(entities)
@@ -338,6 +367,7 @@ class ExtractPanel(QWidget):
     def _on_extract_done(self, result: dict):
         self.progress.setVisible(False)
         self.btn_extract.setEnabled(True)
+        self.btn_reextract.setEnabled(bool(self.current_doc))
         self.btn_extract.setText("提取实体信息")
 
         if result.get("parse_error"):
@@ -375,6 +405,7 @@ class ExtractPanel(QWidget):
         self.btn_batch.setEnabled(True)
         self.btn_batch.setText("批量提取")
         self.btn_extract.setEnabled(False)
+        self.btn_reextract.setEnabled(False)
 
         entities = result.get("entities", [])
         failures = result.get("failures", [])
@@ -401,6 +432,7 @@ class ExtractPanel(QWidget):
         self.btn_batch.setEnabled(True)
         self.btn_batch.setText("批量提取")
         self.btn_extract.setEnabled(False)
+        self.btn_reextract.setEnabled(False)
         QMessageBox.critical(self, "批量提取失败", msg)
 
     def _set_export_enabled(self, enabled: bool):
@@ -477,5 +509,6 @@ class ExtractPanel(QWidget):
     def _on_extract_error(self, msg: str):
         self.progress.setVisible(False)
         self.btn_extract.setEnabled(True)
+        self.btn_reextract.setEnabled(bool(self.current_doc))
         self.btn_extract.setText("提取实体信息")
         QMessageBox.critical(self, "提取失败", msg)

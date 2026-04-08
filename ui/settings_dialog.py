@@ -112,6 +112,9 @@ class SettingsDialog(QDialog):
         self.openai_model = QLineEdit()
         self.openai_model.setPlaceholderText("gpt-4o-mini")
         openai_form.addRow("模型名称:", self.openai_model)
+        self.btn_test_openai = QPushButton("测试连接")
+        self.btn_test_openai.clicked.connect(self._test_openai)
+        openai_form.addRow("", self.btn_test_openai)
         layout.addWidget(openai_group)
 
         # 按钮
@@ -148,6 +151,27 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "连接失败",
                                  f"无法连接到 Ollama\n地址: {url}\n错误: {e}")
+
+    def _test_openai(self):
+        from openai import OpenAI
+        api_key = self.openai_key.text().strip()
+        base_url = self.openai_url.text().strip() or "https://api.openai.com/v1"
+        if not api_key:
+            QMessageBox.warning(self, "配置不完整", "请先填写 API Key")
+            return
+
+        try:
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=10)
+            models = client.models.list()
+            names = [m.id for m in models.data[:10]]
+            if names:
+                QMessageBox.information(self, "连接成功",
+                                        f"OpenAI兼容API连接正常\n可用模型: {', '.join(names)}")
+            else:
+                QMessageBox.information(self, "连接成功", "OpenAI兼容API连接正常，但未返回模型列表")
+        except Exception as e:
+            QMessageBox.critical(self, "连接失败",
+                                 f"无法连接到 OpenAI兼容API\n地址: {base_url}\n错误: {e}")
 
     def _save(self):
         # 更新运行时配置
