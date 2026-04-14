@@ -10,6 +10,7 @@ log = get_logger("core.parser")
 class DocumentParser:
     IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".bmp"}
     SUPPORTED_TYPES = {".docx", ".md", ".xlsx", ".txt", ".pdf"} | IMAGE_TYPES
+    _CACHE: dict[tuple[str, float, int], dict] = {}
 
     @staticmethod
     def parse(file_path: str) -> dict:
@@ -19,10 +20,27 @@ class DocumentParser:
         if suffix not in DocumentParser.SUPPORTED_TYPES:
             raise ValueError(f"不支持的文件格式: {suffix}")
 
+        stat = path.stat() if path.exists() else None
+        file_size = stat.st_size if stat else 0
+        mtime = stat.st_mtime if stat else 0.0
+        cache_key = (str(path.resolve()), mtime, file_size)
+        cached = DocumentParser._CACHE.get(cache_key)
+        if cached:
+            return {
+                "text": cached["text"],
+                "file_type": cached["file_type"],
+                "metadata": {
+                    **cached["metadata"],
+                    "parsed_at": datetime.now().isoformat(),
+                    "cache_hit": True,
+                },
+            }
+
         metadata = {
             "filename": path.name,
-            "file_size": path.stat().st_size if path.exists() else 0,
+            "file_size": file_size,
             "parsed_at": datetime.now().isoformat(),
+            "cache_hit": False,
         }
 
         try:
@@ -34,8 +52,10 @@ class DocumentParser:
                 text = DocumentParser._parse_pdf(path)
             elif suffix in DocumentParser.IMAGE_TYPES:
                 text = DocumentParser._parse_image(path)
-            elif suffix in (".md", ".txt"):
-                text = path.read_text(encoding="utf-8")
+            elif suffix == ".md":
+                text = DocumentParser._parse_md(path)
+            elif suffix == ".txt":
+                text = DocumentParser._parse_txt(path)
             else:
                 text = ""
         except Exception as e:
@@ -43,7 +63,20 @@ class DocumentParser:
             raise
 
         log.info(f"解析完成: {path.name}, {len(text)}字符")
-        return {"text": text, "file_type": suffix.lstrip("."), "metadata": metadata}
+        result = {"text": text, "file_type": suffix.lstrip("."), "metadata": metadata}
+        DocumentParser._CACHE[cache_key] = result
+        if len(DocumentParser._CACHE) > 64:
+            oldest_key = next(iter(DocumentParser._CACHE))
+            DocumentParser._CACHE.pop(oldest_key, None)
+        return result
+
+    @staticmethod
+    def _parse_md(path: Path) -> str:
+        return path.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _parse_txt(path: Path) -> str:
+        return path.read_text(encoding="utf-8")
 
     @staticmethod
     def _parse_docx(path: Path) -> str:

@@ -85,17 +85,11 @@ class ImportWorker(QThread):
         try:
             total = len(self.articles)
             entity_count = 0
+            if self.articles:
+                CrawledArticleDAO.create_batch(self.articles)
+            loop = asyncio.new_event_loop()
+            extractor = EntityExtractor()
             for i, a in enumerate(self.articles):
-                # 存入 CrawledArticle 表
-                CrawledArticleDAO.create(
-                    title=a.get("title", ""),
-                    author=a.get("author", ""),
-                    source=a.get("source", ""),
-                    url=a.get("url", ""),
-                    publish_date=a.get("publish_date", ""),
-                    content=a.get("content", ""),
-                    category=a.get("category", ""),
-                )
                 # 同时存入 Document 表并提取实体
                 content = a.get("content", "")
                 if content:
@@ -110,9 +104,7 @@ class ImportWorker(QThread):
                         file_path=str(file_path)
                     )
                     DocumentDAO.update_text(doc.id, content)
-                    loop = asyncio.new_event_loop()
                     try:
-                        extractor = EntityExtractor()
                         result = loop.run_until_complete(extractor.extract(content))
                         entities = result.get("entities", [])
                         if entities:
@@ -120,12 +112,13 @@ class ImportWorker(QThread):
                             entity_count += len(entities)
                     except Exception as e:
                         log.warning("导入爬取文章时实体提取失败: %s - %s", a.get("title", ""), e)
-                    finally:
-                        loop.close()
                 self.progress.emit(i + 1, total)
             self.finished.emit(entity_count)
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            if "loop" in locals():
+                loop.close()
 
 
 class CrawlerPanel(QWidget):

@@ -309,6 +309,23 @@ class ExtractPanel(QWidget):
                 return
         else:
             text = self.current_doc.raw_text
+            existing_entities = EntityDAO.get_by_document(self.current_doc.id)
+            if existing_entities:
+                entities = [
+                    {
+                        "type": e.entity_type,
+                        "value": e.entity_value,
+                        "context": e.context or "",
+                        "confidence": e.confidence or 0.0,
+                    }
+                    for e in existing_entities
+                ]
+                self.current_entities = entities
+                self._set_export_enabled(bool(entities))
+                self.summary_frame.setVisible(False)
+                self._render_entities(entities)
+                QMessageBox.information(self, "提示", "当前文档已有提取结果，已直接加载。若需重新生成，请使用“清除并重新提取”。")
+                return
 
         self.btn_extract.setEnabled(False)
         self.btn_reextract.setEnabled(False)

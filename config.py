@@ -26,6 +26,7 @@ LLM_CONFIG = {
         "model": os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
     },
     "openai": {
+        "vendor": os.getenv("OPENAI_VENDOR", "openai"),
         "api_key": os.getenv("OPENAI_API_KEY", ""),
         "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),

@@ -22,3 +22,13 @@ data/logs/
 
 *.log
 *.spec.bak
+
+data/settings.json
+.claude/
+CLAUDE.md
+GITHUB_PUSH_CONSTRAINT.md
+tests/.tmp_crawled/
+tests/test_data/cache_test.txt
+tests/test_data/*_working*.docx
+A23-???????????-????.docx
+A23-*.docx

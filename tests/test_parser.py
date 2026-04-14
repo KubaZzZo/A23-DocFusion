@@ -54,3 +54,25 @@ class TestDocumentParser:
         assert ".jpg" in DocumentParser.SUPPORTED_TYPES
         assert ".jpeg" in DocumentParser.SUPPORTED_TYPES
         assert ".bmp" in DocumentParser.SUPPORTED_TYPES
+
+    def test_parse_uses_cache_for_unchanged_file(self, monkeypatch):
+        path = TEST_DIR / "cache_test.txt"
+        path.write_text("cache me", encoding="utf-8")
+        calls = {"count": 0}
+
+        def fake_parse_txt(p):
+            calls["count"] += 1
+            return p.read_text(encoding="utf-8")
+
+        monkeypatch.setattr(DocumentParser, "_parse_txt", staticmethod(fake_parse_txt), raising=False)
+        monkeypatch.setattr(DocumentParser, "_parse_docx", staticmethod(lambda p: "docx"))
+        monkeypatch.setattr(DocumentParser, "_parse_xlsx", staticmethod(lambda p: "xlsx"))
+        monkeypatch.setattr(DocumentParser, "_parse_pdf", staticmethod(lambda p: "pdf"))
+        monkeypatch.setattr(DocumentParser, "_parse_image", staticmethod(lambda p: "img"))
+
+        first = DocumentParser.parse(str(path))
+        second = DocumentParser.parse(str(path))
+
+        assert first["text"] == "cache me"
+        assert second["text"] == "cache me"
+        assert calls["count"] == 1

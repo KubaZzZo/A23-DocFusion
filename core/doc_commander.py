@@ -52,9 +52,33 @@ class DocCommander:
         result = await self.llm.chat(messages)
         try:
             cleaned = strip_json_code_fence(result)
-            return json.loads(cleaned)
+            parsed = json.loads(cleaned)
+            return self._normalize_command(user_input, parsed)
         except json.JSONDecodeError:
             return {"error": "指令解析失败", "raw": result}
+
+    @staticmethod
+    def _normalize_command(user_input: str, parsed: dict) -> dict:
+        """对 LLM 输出做轻量纠偏，避免常见文档结构歧义。"""
+        if not isinstance(parsed, dict):
+            return parsed
+
+        action = parsed.get("action")
+        target = parsed.get("target")
+        params = parsed.get("params", {})
+        description = parsed.get("description", "")
+        text = f"{user_input} {description}"
+
+        if (
+            action == "format"
+            and target == "paragraph"
+            and isinstance(params, dict)
+            and "index" in params
+            and "行" in text
+        ):
+            parsed["target"] = "table_row"
+
+        return parsed
 
     def execute(self, doc_path: str, command: dict) -> dict:
         """执行操作指令（自动备份原文件）"""
@@ -80,7 +104,10 @@ class DocCommander:
             backup_path = None
 
         try:
-            result = handler(doc_path, command.get("params", {}))
+            params = dict(command.get("params", {}))
+            if "target" in command and "target" not in params:
+                params["target"] = command["target"]
+            result = handler(doc_path, params)
             if backup_path:
                 result["backup_path"] = str(backup_path)
             return result
@@ -103,6 +130,46 @@ class DocCommander:
 
     def _handle_format(self, doc_path: str, params: dict) -> dict:
         doc = DocxDocument(doc_path)
+        target = params.get("target", "paragraph")
+
+        if target == "table_row":
+            row_idx = params.get("index", 0)
+            tables = doc.tables
+            if not tables:
+                return {"success": False, "message": "当前文档中没有表格，无法按“行”执行格式操作"}
+            first_table = tables[0]
+            if row_idx >= len(first_table.rows):
+                return {"success": False, "message": f"表格行索引{row_idx}超出范围"}
+
+            for cell in first_table.rows[row_idx].cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        if "bold" in params:
+                            run.bold = params["bold"]
+                        if "italic" in params:
+                            run.italic = params["italic"]
+                        if "underline" in params:
+                            run.underline = params["underline"]
+                        if "font_size" in params:
+                            run.font.size = Pt(params["font_size"])
+                        if "font_name" in params:
+                            run.font.name = params["font_name"]
+                        if "color" in params:
+                            r, g, b = params["color"]
+                            run.font.color.rgb = RGBColor(r, g, b)
+                if "alignment" in params:
+                    align_map = {
+                        "left": WD_ALIGN_PARAGRAPH.LEFT,
+                        "center": WD_ALIGN_PARAGRAPH.CENTER,
+                        "right": WD_ALIGN_PARAGRAPH.RIGHT,
+                        "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+                    }
+                    for para in cell.paragraphs:
+                        para.alignment = align_map.get(params["alignment"], WD_ALIGN_PARAGRAPH.LEFT)
+
+            doc.save(doc_path)
+            return {"success": True, "message": f"已完成第{row_idx + 1}行格式调整"}
+
         idx = params.get("index", 0)
         if idx >= len(doc.paragraphs):
             return {"success": False, "message": f"段落索引{idx}超出范围"}

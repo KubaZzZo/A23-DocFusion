@@ -16,6 +16,135 @@ SETTINGS_FILE = BASE_DIR / "data" / "settings.json"
 log = get_logger("ui.settings_dialog")
 
 
+CLOUD_VENDOR_PRESETS = {
+    "openai": {
+        "id": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "model_placeholder": "gpt-4o-mini",
+        "api_key_placeholder": "sk-...",
+    },
+    "deepseek": {
+        "id": "deepseek",
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "model_placeholder": "deepseek-chat",
+        "api_key_placeholder": "sk-...",
+    },
+    "moonshot": {
+        "id": "moonshot",
+        "label": "Moonshot",
+        "base_url": "https://api.moonshot.cn/v1",
+        "model_placeholder": "moonshot-v1-8k",
+        "api_key_placeholder": "sk-...",
+    },
+    "qwen": {
+        "id": "qwen",
+        "label": "通义千问",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model_placeholder": "qwen-plus",
+        "api_key_placeholder": "sk-...",
+    },
+    "zhipu": {
+        "id": "zhipu",
+        "label": "智谱",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+        "model_placeholder": "glm-4-plus",
+        "api_key_placeholder": "sk-...",
+    },
+    "claude_compatible": {
+        "id": "claude_compatible",
+        "label": "Claude（兼容接口）",
+        "base_url": "",
+        "model_placeholder": "claude-3-5-sonnet",
+        "api_key_placeholder": "兼容接口提供的 API Key",
+    },
+    "custom": {
+        "id": "custom",
+        "label": "自定义兼容接口",
+        "base_url": "",
+        "model_placeholder": "your-model-name",
+        "api_key_placeholder": "your-api-key",
+    },
+}
+
+
+def get_cloud_vendor_preset(vendor: str) -> dict:
+    return CLOUD_VENDOR_PRESETS.get(vendor, CLOUD_VENDOR_PRESETS["custom"])
+
+
+def _normalize_models_url(base_url: str) -> str:
+    url = (base_url or "https://api.openai.com/v1").strip().rstrip("/")
+    if not url:
+        url = "https://api.openai.com/v1"
+    if url.endswith("/models"):
+        return url
+    return f"{url}/models"
+
+
+def _extract_model_names(payload) -> list[str]:
+    if payload is None or isinstance(payload, str):
+        return []
+
+    items = []
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = [data]
+        elif isinstance(payload.get("models"), list):
+            items = payload.get("models", [])
+        else:
+            return []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        data = getattr(payload, "data", None)
+        if isinstance(data, list):
+            items = data
+        elif data is not None:
+            items = [data]
+        else:
+            return []
+
+    names = []
+    for item in items:
+        if isinstance(item, str):
+            if item:
+                names.append(item)
+            continue
+        if isinstance(item, dict):
+            name = item.get("id") or item.get("name") or item.get("model")
+            if name:
+                names.append(str(name))
+            continue
+        name = getattr(item, "id", None) or getattr(item, "name", None) or getattr(item, "model", None)
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _probe_openai_compatible(api_key: str, base_url: str) -> tuple[list[str], str]:
+    import httpx
+
+    url = _normalize_models_url(base_url)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    response = httpx.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return [], "???????????? JSON ????"
+
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        error = payload["error"].get("message") or str(payload["error"])
+        raise RuntimeError(error)
+
+    return _extract_model_names(payload), ""
+
+
 def _encode_key(key: str) -> str:
     """对 API Key 进行 base64 编码，避免明文存储"""
     if not key:
@@ -68,6 +197,8 @@ def apply_saved_settings():
         LLM_CONFIG["ollama"]["model"] = settings["ollama_model"]
     if "openai_key" in settings:
         LLM_CONFIG["openai"]["api_key"] = _decode_key(settings["openai_key"])
+    if "openai_vendor" in settings:
+        LLM_CONFIG["openai"]["vendor"] = settings["openai_vendor"]
     if "openai_url" in settings:
         LLM_CONFIG["openai"]["base_url"] = settings["openai_url"]
     if "openai_model" in settings:
@@ -102,6 +233,11 @@ class SettingsDialog(QDialog):
         # OpenAI 设置
         openai_group = QGroupBox("OpenAI / 兼容API (云端)")
         openai_form = QFormLayout(openai_group)
+        self.openai_vendor = QComboBox()
+        for vendor_id, preset in CLOUD_VENDOR_PRESETS.items():
+            self.openai_vendor.addItem(preset["label"], vendor_id)
+        self.openai_vendor.currentIndexChanged.connect(self._on_vendor_changed)
+        openai_form.addRow("云端供应商:", self.openai_vendor)
         self.openai_key = QLineEdit()
         self.openai_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.openai_key.setPlaceholderText("sk-...")
@@ -132,9 +268,28 @@ class SettingsDialog(QDialog):
     def _load_current(self):
         self.ollama_url.setText(LLM_CONFIG["ollama"]["base_url"])
         self.ollama_model.setText(LLM_CONFIG["ollama"]["model"])
+        vendor = LLM_CONFIG["openai"].get("vendor", "openai")
+        index = self.openai_vendor.findData(vendor)
+        self.openai_vendor.setCurrentIndex(index if index >= 0 else self.openai_vendor.findData("custom"))
         self.openai_key.setText(LLM_CONFIG["openai"]["api_key"])
         self.openai_url.setText(LLM_CONFIG["openai"]["base_url"])
         self.openai_model.setText(LLM_CONFIG["openai"]["model"])
+        self._apply_vendor_preset(self.openai_vendor.currentData(), preserve_values=True)
+
+    def _apply_vendor_preset(self, vendor: str, preserve_values: bool = False):
+        preset = get_cloud_vendor_preset(vendor)
+        self.openai_key.setPlaceholderText(preset["api_key_placeholder"])
+        self.openai_url.setPlaceholderText(preset["base_url"] or "https://api.example.com/v1")
+        self.openai_model.setPlaceholderText(preset["model_placeholder"])
+
+        if not preserve_values:
+            self.openai_url.setText(preset["base_url"])
+            if not self.openai_model.text().strip():
+                self.openai_model.setText(preset["model_placeholder"])
+
+    def _on_vendor_changed(self, index: int):
+        vendor = self.openai_vendor.itemData(index)
+        self._apply_vendor_preset(vendor)
 
     def _test_ollama(self):
         import httpx
@@ -153,30 +308,36 @@ class SettingsDialog(QDialog):
                                  f"无法连接到 Ollama\n地址: {url}\n错误: {e}")
 
     def _test_openai(self):
-        from openai import OpenAI
         api_key = self.openai_key.text().strip()
         base_url = self.openai_url.text().strip() or "https://api.openai.com/v1"
+        vendor_label = self.openai_vendor.currentText()
         if not api_key:
             QMessageBox.warning(self, "配置不完整", "请先填写 API Key")
             return
 
         try:
-            client = OpenAI(api_key=api_key, base_url=base_url, timeout=10)
-            models = client.models.list()
-            names = [m.id for m in models.data[:10]]
+            names, note = _probe_openai_compatible(api_key, base_url)
             if names:
-                QMessageBox.information(self, "连接成功",
-                                        f"OpenAI兼容API连接正常\n可用模型: {', '.join(names)}")
+                QMessageBox.information(
+                    self,
+                    "连接成功",
+                    f"{vendor_label} 连接正常\n可用模型: {', '.join(names[:10])}",
+                )
             else:
-                QMessageBox.information(self, "连接成功", "OpenAI兼容API连接正常，但未返回模型列表")
+                extra = note or "兼容接口已响应，但未返回标准模型列表"
+                QMessageBox.information(self, "连接成功", f"{vendor_label} 连接正常\n{extra}")
         except Exception as e:
-            QMessageBox.critical(self, "连接失败",
-                                 f"无法连接到 OpenAI兼容API\n地址: {base_url}\n错误: {e}")
+            QMessageBox.critical(
+                self,
+                "连接失败",
+                f"无法连接到 {vendor_label}\n地址: {_normalize_models_url(base_url)}\n错误: {e}",
+            )
 
     def _save(self):
         # 更新运行时配置
         LLM_CONFIG["ollama"]["base_url"] = self.ollama_url.text().strip() or "http://localhost:11434"
         LLM_CONFIG["ollama"]["model"] = self.ollama_model.text().strip() or "qwen2.5:7b"
+        LLM_CONFIG["openai"]["vendor"] = self.openai_vendor.currentData() or "openai"
         LLM_CONFIG["openai"]["api_key"] = self.openai_key.text().strip()
         LLM_CONFIG["openai"]["base_url"] = self.openai_url.text().strip() or "https://api.openai.com/v1"
         LLM_CONFIG["openai"]["model"] = self.openai_model.text().strip() or "gpt-4o-mini"
@@ -186,6 +347,7 @@ class SettingsDialog(QDialog):
             "provider": LLM_CONFIG["provider"],
             "ollama_url": LLM_CONFIG["ollama"]["base_url"],
             "ollama_model": LLM_CONFIG["ollama"]["model"],
+            "openai_vendor": LLM_CONFIG["openai"]["vendor"],
             "openai_key": _encode_key(LLM_CONFIG["openai"]["api_key"]),
             "openai_url": LLM_CONFIG["openai"]["base_url"],
             "openai_model": LLM_CONFIG["openai"]["model"],
