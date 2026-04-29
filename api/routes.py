@@ -1,21 +1,18 @@
 """FastAPI路由定义"""
 import csv
 import io
-import json
-import asyncio
-from pathlib import Path
-from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from core import DocumentParser, EntityExtractor, DocCommander, TemplateFiller
+from core.document_workflow import DocumentWorkflow
+from core.template_workflow import TemplateWorkflow
+from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
 from db.database import DocumentDAO, EntityDAO, TemplateDAO, FillTaskDAO, CrawledArticleDAO
-from config import UPLOAD_DIR
-from logger import get_logger
 
-log = get_logger("api.routes")
 
 router = APIRouter(prefix="/api")
+document_workflow = DocumentWorkflow()
+template_workflow = TemplateWorkflow()
 
 
 class CommandRequest(BaseModel):
@@ -28,92 +25,65 @@ class FillRequest(BaseModel):
     document_ids: list[int] = []
 
 
+def _raise_http_error(error: Exception):
+    if isinstance(error, WorkflowNotFoundError):
+        raise HTTPException(404, str(error))
+    if isinstance(error, WorkflowValidationError):
+        raise HTTPException(400, str(error))
+    raise error
+
+
 # --- 文档相关 ---
 
 @router.get("/documents", tags=["文档管理"], summary="获取文档列表")
 async def list_documents():
     """获取所有已上传的文档列表"""
-    docs = DocumentDAO.get_all()
-    return [{"id": d.id, "filename": d.filename, "file_type": d.file_type,
-             "parsed": d.raw_text is not None,
-             "created_at": d.created_at.isoformat() if d.created_at else None} for d in docs]
+    return document_workflow.list_documents()
 
 
 @router.delete("/documents/{doc_id}", tags=["文档管理"], summary="删除文档")
 async def delete_document(doc_id: int):
     """删除文档及其关联的实体数据"""
-    doc = DocumentDAO.get_by_id(doc_id)
-    if not doc:
-        raise HTTPException(404, "文档不存在")
-    # 删除物理文件
-    if doc.file_path:
-        Path(doc.file_path).unlink(missing_ok=True)
-    DocumentDAO.delete(doc_id)
-    return {"message": f"文档 {doc.filename} 已删除"}
+    try:
+        return document_workflow.delete_document(doc_id)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 @router.post("/documents/upload", tags=["文档管理"], summary="上传文档")
 async def upload_document(file: UploadFile = File(...)):
     """上传文档文件，支持 docx/md/xlsx/txt/pdf 格式"""
-    suffix = Path(file.filename).suffix.lower()
-    if suffix not in DocumentParser.SUPPORTED_TYPES:
-        raise HTTPException(400, f"不支持的格式: {suffix}")
-
-    save_path = UPLOAD_DIR / Path(file.filename).name
-    if save_path.exists():
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        stem = Path(file.filename).stem
-        save_path = UPLOAD_DIR / f"{stem}_{timestamp}{suffix}"
-    content = await file.read()
-    save_path.write_bytes(content)
-
-    doc = DocumentDAO.create(file.filename, suffix.lstrip("."), str(save_path))
-    return {"id": doc.id, "filename": doc.filename}
+    try:
+        return document_workflow.upload_document(file.filename, await file.read())
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 @router.post("/documents/parse/{doc_id}", tags=["文档管理"], summary="解析文档")
 async def parse_document(doc_id: int):
     """解析已上传的文档，提取文本内容"""
-    doc = DocumentDAO.get_by_id(doc_id)
-    if not doc:
-        raise HTTPException(404, "文档不存在")
-
-    result = DocumentParser.parse(doc.file_path)
-    DocumentDAO.update_text(doc_id, result["text"])
-    return {"doc_id": doc_id, "metadata": result["metadata"], "text_length": len(result["text"])}
+    try:
+        return document_workflow.parse_document(doc_id)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 @router.post("/documents/extract/{doc_id}", tags=["实体提取"], summary="提取文档实体")
 async def extract_entities(doc_id: int):
     """从已解析的文档中提取结构化实体信息"""
-    doc = DocumentDAO.get_by_id(doc_id)
-    if not doc or not doc.raw_text:
-        raise HTTPException(400, "文档未解析，请先调用parse接口")
-
-    extractor = EntityExtractor()
-    result = await extractor.extract(doc.raw_text)
-
-    entities = result.get("entities", [])
-    EntityDAO.create_batch(doc_id, entities)
-    return {"doc_id": doc_id, "entities_count": len(entities), "summary": result.get("summary", "")}
+    try:
+        return await document_workflow.extract_entities(doc_id)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 @router.post("/documents/command", tags=["文档管理"], summary="执行文档操作指令")
 async def execute_command(req: CommandRequest):
     """使用自然语言指令操作文档"""
-    doc = DocumentDAO.get_by_id(req.doc_id)
-    if not doc:
-        raise HTTPException(404, "文档不存在")
-
-    commander = DocCommander()
-    doc_info = f"文件名: {doc.filename}, 类型: {doc.file_type}"
-    parsed = await commander.parse_command(req.command, doc_info)
-
-    if "error" in parsed:
-        raise HTTPException(400, parsed["error"])
-
-    result = commander.execute(doc.file_path, parsed)
-    return {"command": parsed, "result": result}
+    try:
+        return await document_workflow.execute_command(req.doc_id, req.command)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 # --- 实体查询 ---
@@ -192,60 +162,26 @@ async def export_entities(fmt: str = "csv", doc_id: int = None, keyword: str = N
 @router.post("/templates/upload", tags=["模板填写"], summary="上传模板")
 async def upload_template(file: UploadFile = File(...)):
     """上传模板表格文件，自动分析待填写字段"""
-    save_path = UPLOAD_DIR / Path(file.filename).name
-    if save_path.exists():
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        stem = Path(file.filename).stem
-        ext = Path(file.filename).suffix
-        save_path = UPLOAD_DIR / f"{stem}_{timestamp}{ext}"
-    content = await file.read()
-    save_path.write_bytes(content)
-
-    filler = TemplateFiller()
-    analysis = await filler.analyze_template(str(save_path))
-    tpl = TemplateDAO.create(file.filename, str(save_path), json.dumps(analysis, ensure_ascii=False))
-    return {"id": tpl.id, "filename": tpl.filename, "fields": analysis["field_names"]}
-
-
-async def _do_fill(task_id: int, template_path: str, entities: list[dict]):
-    FillTaskDAO.update_status(task_id, "processing")
     try:
-        filler = TemplateFiller()
-        result = await filler.fill(template_path, entities)
-        FillTaskDAO.update_status(task_id, "completed",
-                                  result_path=result.get("output_path"),
-                                  accuracy=result.get("accuracy"))
-        log.info(f"填写任务 {task_id} 完成, 准确率: {result.get('accuracy')}")
-    except Exception as e:
-        log.error(f"填写任务 {task_id} 失败: {e}")
-        FillTaskDAO.update_status(task_id, "failed")
-
-
-def _run_fill_task(task_id: int, template_path: str, entities: list[dict]):
-    """BackgroundTasks 的同步包装，避免 async 任务在响应路径中被直接等待。"""
-    asyncio.run(_do_fill(task_id, template_path, entities))
+        return await template_workflow.upload_template(file.filename, await file.read())
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 @router.post("/templates/fill", tags=["模板填写"], summary="自动填写模板")
 async def fill_template(req: FillRequest, background_tasks: BackgroundTasks):
     """使用提取的实体数据自动填写模板，异步执行"""
-    tpl = TemplateDAO.get_by_id(req.template_id)
-    if not tpl:
-        raise HTTPException(404, "模板不存在")
-
-    # 收集实体
-    entities = []
-    if req.document_ids:
-        for did in req.document_ids:
-            for e in EntityDAO.get_by_document(did):
-                entities.append({"type": e.entity_type, "value": e.entity_value, "confidence": e.confidence})
-    else:
-        for e in EntityDAO.get_all():
-            entities.append({"type": e.entity_type, "value": e.entity_value, "confidence": e.confidence})
-
-    task = FillTaskDAO.create(tpl.id)
-    background_tasks.add_task(_run_fill_task, task.id, tpl.file_path, entities)
-    return {"task_id": task.id, "status": "pending"}
+    try:
+        task = template_workflow.create_fill_task(req.template_id, req.document_ids)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
+    background_tasks.add_task(
+        template_workflow.run_fill_task,
+        task["task_id"],
+        task["template_path"],
+        task["entities"],
+    )
+    return {"task_id": task["task_id"], "status": task["status"]}
 
 
 @router.get("/templates/fill/{task_id}", tags=["模板填写"], summary="查询填写任务状态")
