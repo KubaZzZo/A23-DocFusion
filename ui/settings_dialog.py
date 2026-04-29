@@ -5,12 +5,15 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from config import LLM_CONFIG
-import json
-import base64
-import os
-from pathlib import Path
 from config import BASE_DIR
 from logger import get_logger
+from settings_store import (
+    apply_saved_settings as _apply_saved_settings,
+    decode_key,
+    encode_key,
+    load_settings as _load_settings,
+    save_settings as _save_settings,
+)
 
 SETTINGS_FILE = BASE_DIR / "data" / "settings.json"
 log = get_logger("ui.settings_dialog")
@@ -147,62 +150,27 @@ def _probe_openai_compatible(api_key: str, base_url: str) -> tuple[list[str], st
 
 def _encode_key(key: str) -> str:
     """对 API Key 进行 base64 编码，避免明文存储"""
-    if not key:
-        return ""
-    return base64.b64encode(key.encode("utf-8")).decode("utf-8")
+    return encode_key(key)
 
 
 def _decode_key(encoded: str) -> str:
     """解码 API Key"""
-    if not encoded:
-        return ""
-    try:
-        return base64.b64decode(encoded.encode("utf-8")).decode("utf-8")
-    except Exception:
-        # 兼容旧版明文存储
-        return encoded
+    return decode_key(encoded)
 
 
 def load_settings() -> dict:
     """从文件加载设置"""
-    if SETTINGS_FILE.exists():
-        try:
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        except Exception as e:
-            log.warning("加载设置文件失败，使用默认设置: %s", e)
-    return {}
+    return _load_settings(SETTINGS_FILE)
 
 
 def save_settings(settings: dict):
     """保存设置到文件"""
-    SETTINGS_FILE.parent.mkdir(exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-    # 限制文件权限（仅当前用户可读写）
-    try:
-        os.chmod(SETTINGS_FILE, 0o600)
-    except OSError:
-        pass
+    _save_settings(settings, SETTINGS_FILE)
 
 
 def apply_saved_settings():
     """启动时应用已保存的设置到 LLM_CONFIG"""
-    settings = load_settings()
-    if not settings:
-        return
-    if "provider" in settings:
-        LLM_CONFIG["provider"] = settings["provider"]
-    if "ollama_url" in settings:
-        LLM_CONFIG["ollama"]["base_url"] = settings["ollama_url"]
-    if "ollama_model" in settings:
-        LLM_CONFIG["ollama"]["model"] = settings["ollama_model"]
-    if "openai_key" in settings:
-        LLM_CONFIG["openai"]["api_key"] = _decode_key(settings["openai_key"])
-    if "openai_vendor" in settings:
-        LLM_CONFIG["openai"]["vendor"] = settings["openai_vendor"]
-    if "openai_url" in settings:
-        LLM_CONFIG["openai"]["base_url"] = settings["openai_url"]
-    if "openai_model" in settings:
-        LLM_CONFIG["openai"]["model"] = settings["openai_model"]
+    _apply_saved_settings(SETTINGS_FILE, LLM_CONFIG)
 
 
 class SettingsDialog(QDialog):

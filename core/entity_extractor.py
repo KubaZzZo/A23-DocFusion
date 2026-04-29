@@ -1,6 +1,7 @@
 """实体提取器 - 使用LLM从文本中提取结构化信息"""
 import asyncio
 from llm import get_llm
+from llm.json_utils import normalize_entity_result
 from core.text_chunker import TextChunker
 from logger import get_logger
 
@@ -99,6 +100,8 @@ class EntityExtractor:
         if result.get("parse_error"):
             return result
 
+        result = normalize_entity_result(result)
+
         # 二轮验证：对低置信度实体进行精确验证
         if self.enable_verify:
             result = await self._verify_low_confidence(result, text)
@@ -131,6 +134,7 @@ class EntityExtractor:
         if verify_result.get("parse_error"):
             log.warning("二轮验证解析失败，保留原始结果")
             return result
+        verify_result = normalize_entity_result(verify_result)
 
         # 合并验证结果
         verified = verify_result.get("entities", [])

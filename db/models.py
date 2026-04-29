@@ -6,6 +6,7 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from config import DB_PATH
 
 Base = declarative_base()
+DEFAULT_DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 
 class Document(Base):
@@ -69,8 +70,33 @@ class CrawledArticle(Base):
 
 
 # 数据库初始化
-engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
+engine = create_engine(DEFAULT_DATABASE_URL, echo=False)
+_default_engine = engine
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+_database_url = DEFAULT_DATABASE_URL
+
+
+def configure_database(database_url: str):
+    """Rebind the global engine/session factory to a database URL."""
+    global engine, SessionLocal, _database_url
+    old_engine = engine
+    _database_url = database_url
+    if database_url == DEFAULT_DATABASE_URL:
+        engine = _default_engine
+    else:
+        engine = create_engine(database_url, echo=False)
+    SessionLocal.configure(bind=engine)
+    if old_engine is not _default_engine and old_engine is not engine:
+        old_engine.dispose()
+
+
+def reset_database():
+    """Restore the default SQLite database binding."""
+    configure_database(DEFAULT_DATABASE_URL)
+
+
+def get_database_url() -> str:
+    return _database_url
 
 
 def init_db():
