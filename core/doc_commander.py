@@ -85,6 +85,10 @@ class DocCommander:
         if Path(doc_path).suffix.lower() != ".docx":
             return {"success": False, "message": "文档智能操作目前仅支持 .docx 格式"}
 
+        validation_error = self._validate_command(command)
+        if validation_error:
+            return {"success": False, "message": validation_error}
+
         action = command.get("action")
         handlers = {
             "format": self._handle_format,
@@ -117,6 +121,96 @@ class DocCommander:
                 shutil.copyfile(backup_path, doc_path)
                 Path(doc_path).chmod(0o666)
             return {"success": False, "message": str(e)}
+
+    @classmethod
+    def _validate_command(cls, command: dict) -> str:
+        """Validate LLM command output before any file mutation or backup."""
+        if not isinstance(command, dict):
+            return "command must be an object"
+
+        action = command.get("action")
+        params = command.get("params", {})
+        if not isinstance(params, dict):
+            return "params must be an object"
+
+        target = command.get("target", params.get("target"))
+        if action == "format":
+            return cls._validate_format_command(target, params)
+        if action == "edit":
+            return cls._validate_edit_command(params)
+        if action == "find_replace":
+            return cls._validate_find_replace_command(params)
+        if action == "extract":
+            return cls._validate_extract_command(target)
+        if action == "structure":
+            return cls._validate_structure_command(params)
+        return ""
+
+    @staticmethod
+    def _validate_format_command(target, params: dict) -> str:
+        allowed_targets = {"paragraph", "table_row", None}
+        if target not in allowed_targets:
+            return f"target 不支持: {target}"
+        if "index" in params and (not isinstance(params["index"], int) or params["index"] < 0):
+            return "index must be a non-negative integer"
+        if "font_size" in params and (
+            not isinstance(params["font_size"], (int, float)) or params["font_size"] <= 0
+        ):
+            return "font_size must be a positive number"
+        if "color" in params:
+            color = params["color"]
+            if (
+                not isinstance(color, (list, tuple))
+                or len(color) != 3
+                or any(not isinstance(value, int) or value < 0 or value > 255 for value in color)
+            ):
+                return "color must be three integers between 0 and 255"
+        if "alignment" in params and params["alignment"] not in {"left", "center", "right", "justify"}:
+            return f"alignment 不支持: {params['alignment']}"
+        for key in ("bold", "italic", "underline"):
+            if key in params and not isinstance(params[key], bool):
+                return f"{key} must be a boolean"
+        return ""
+
+    @staticmethod
+    def _validate_edit_command(params: dict) -> str:
+        operation = params.get("operation", "replace")
+        if operation not in {"replace", "insert", "delete"}:
+            return f"operation 不支持: {operation}"
+        if operation in {"replace", "delete"} and (
+            "index" not in params or not isinstance(params["index"], int) or params["index"] < 0
+        ):
+            return "index must be a non-negative integer"
+        if operation in {"replace", "insert"} and not isinstance(params.get("text", ""), str):
+            return "text must be a string"
+        return ""
+
+    @staticmethod
+    def _validate_find_replace_command(params: dict) -> str:
+        if not isinstance(params.get("find"), str) or not params.get("find"):
+            return "find must be a non-empty string"
+        if not isinstance(params.get("replace", ""), str):
+            return "replace must be a string"
+        return ""
+
+    @staticmethod
+    def _validate_extract_command(target) -> str:
+        if target not in {"text", "tables", "headings", None}:
+            return f"target 不支持: {target}"
+        return ""
+
+    @staticmethod
+    def _validate_structure_command(params: dict) -> str:
+        operation = params.get("operation", "add_paragraph")
+        if operation not in {"add_heading", "add_paragraph"}:
+            return f"operation 不支持: {operation}"
+        if not isinstance(params.get("text", ""), str):
+            return "text must be a string"
+        if operation == "add_heading":
+            level = params.get("level", 1)
+            if not isinstance(level, int) or level < 1 or level > 9:
+                return "level must be an integer between 1 and 9"
+        return ""
 
     @staticmethod
     def _backup(doc_path: str) -> Path:
