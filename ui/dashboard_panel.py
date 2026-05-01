@@ -11,6 +11,7 @@ from PyQt6.QtGui import QColor, QFont
 from datetime import datetime
 from db.database import DocumentDAO, EntityDAO, TemplateDAO, CrawledArticleDAO
 from llm import get_llm
+from ui.components import EmptyState
 from ui.task_runner import TaskWorker
 from logger import get_logger
 
@@ -417,10 +418,9 @@ class DashboardPanel(QWidget):
                     self.entity_bars_container.addWidget(bar)
                 self.lbl_entity_total.setText(f"共 {entity_count} 个实体，{len(type_counts)} 种类型")
             else:
-                empty_lbl = QLabel("暂无实体数据\n请先在「信息提取」面板提取文档实体")
-                empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                empty_lbl.setStyleSheet("color: #CCC; font-size: 13px; padding: 30px; background: transparent;")
-                self.entity_bars_container.addWidget(empty_lbl)
+                self.entity_bars_container.addWidget(
+                    EmptyState("暂无实体数据", "请先在「信息提取」面板提取文档实体")
+                )
                 self.lbl_entity_total.setText("")
 
             # 文档类型分布条形图
@@ -438,10 +438,9 @@ class DashboardPanel(QWidget):
                     self.doc_type_bars_container.addWidget(bar)
                 self.lbl_doc_type_total.setText(f"共 {len(docs)} 个文档，{len(doc_type_counts)} 种格式")
             else:
-                empty_doc_lbl = QLabel("暂无文档类型数据")
-                empty_doc_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                empty_doc_lbl.setStyleSheet("color: #CCC; font-size: 13px; padding: 20px; background: transparent;")
-                self.doc_type_bars_container.addWidget(empty_doc_lbl)
+                self.doc_type_bars_container.addWidget(
+                    EmptyState("暂无文档类型数据", "上传或导入文档后会显示格式分布")
+                )
                 self.lbl_doc_type_total.setText("")
 
             # 最近文档

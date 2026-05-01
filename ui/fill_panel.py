@@ -11,6 +11,7 @@ from core.template_filler import TemplateFiller
 from core.template_workflow import TemplateWorkflow
 from core.semantic_matcher import SemanticMatcher
 from db.database import EntityDAO
+from ui.components import EmptyState, set_busy_state
 from ui.fill_confirm_dialog import FillConfirmDialog
 from ui.task_runner import TaskWorker
 import os
@@ -109,10 +110,8 @@ class FillPanel(QWidget):
         right_layout.addWidget(self.result_frame)
 
         # 空状态提示
-        self.lbl_empty_hint = QLabel("选择模板并点击「开始自动填写」后，结果将显示在这里")
-        self.lbl_empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_empty_hint.setStyleSheet("color: #BBB; font-size: 12px; padding: 40px;")
-        right_layout.addWidget(self.lbl_empty_hint, 1)
+        self.empty_state = EmptyState("等待填写模板", "选择模板并点击「开始自动填写」后，结果将显示在这里")
+        right_layout.addWidget(self.empty_state, 1)
 
         self.btn_open_result = QPushButton("打开结果文件")
         self.btn_open_result.clicked.connect(self._open_result)
@@ -177,10 +176,7 @@ class FillPanel(QWidget):
         self.entity_list = [{"type": e.entity_type, "value": e.entity_value,
                              "confidence": e.confidence} for e in entities]
 
-        self.btn_fill.setEnabled(False)
-        self.btn_fill.setText("匹配中...")
-        self.progress.setVisible(True)
-        self.progress.setRange(0, 0)
+        set_busy_state(self.btn_fill, self.progress, True, busy_text="匹配中...")
 
         self.match_worker = TaskWorker(
             lambda: self._run_match_task(self.current_template_path, self.entity_list),
@@ -207,9 +203,7 @@ class FillPanel(QWidget):
     def _on_match_done(self, match_result, analysis=None):
         if analysis is None:
             match_result, analysis = match_result
-        self.progress.setVisible(False)
-        self.btn_fill.setEnabled(True)
-        self.btn_fill.setText("开始自动填写")
+        set_busy_state(self.btn_fill, self.progress, False, idle_text="开始自动填写")
 
         matches = match_result.get("matches", [])
         unmatched = match_result.get("unmatched_fields", [])
@@ -218,7 +212,7 @@ class FillPanel(QWidget):
         dlg = FillConfirmDialog(matches, unmatched, self.entity_list, self)
         if dlg.exec() != dlg.DialogCode.Accepted:
             self.result_frame.setVisible(True)
-            self.lbl_empty_hint.setVisible(False)
+            self.empty_state.setVisible(False)
             self.lbl_result_title.setText("已取消")
             self.lbl_result_detail.setText("用户取消了填写操作")
             self.lbl_result_path.setText("")
@@ -227,7 +221,7 @@ class FillPanel(QWidget):
         fill_map = dlg.get_fill_map()
         if not fill_map:
             self.result_frame.setVisible(True)
-            self.lbl_empty_hint.setVisible(False)
+            self.empty_state.setVisible(False)
             self.lbl_result_title.setText("无需填写")
             self.lbl_result_detail.setText("没有需要填写的字段")
             self.lbl_result_path.setText("")
@@ -244,7 +238,7 @@ class FillPanel(QWidget):
             unmatched_names = result.get("unmatched", [])
 
             self.result_frame.setVisible(True)
-            self.lbl_empty_hint.setVisible(False)
+            self.empty_state.setVisible(False)
             self.lbl_result_title.setText(f"填写完成 — {filled_count}/{total_count} 个字段")
             detail_parts = [f"准确率: {accuracy_str}"]
             if unmatched_names:
@@ -256,9 +250,7 @@ class FillPanel(QWidget):
             QMessageBox.critical(self, "填写失败", str(e))
 
     def _on_fill_error(self, msg):
-        self.progress.setVisible(False)
-        self.btn_fill.setEnabled(True)
-        self.btn_fill.setText("开始自动填写")
+        set_busy_state(self.btn_fill, self.progress, False, idle_text="开始自动填写")
         QMessageBox.critical(self, "填写失败", msg)
 
     def _open_result(self):
