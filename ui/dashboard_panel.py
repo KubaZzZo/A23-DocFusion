@@ -11,7 +11,7 @@ from PyQt6.QtGui import QColor, QFont
 from datetime import datetime
 from db.database import DocumentDAO, EntityDAO, TemplateDAO, CrawledArticleDAO
 from llm import get_llm
-from ui.components import EmptyState
+from ui.components import EmptyState, mark_secondary
 from ui.task_runner import TaskWorker
 from logger import get_logger
 
@@ -262,6 +262,7 @@ class DashboardPanel(QWidget):
         self.input_entity_search.returnPressed.connect(self._search_entities)
         search_bar.addWidget(self.input_entity_search, 1)
         self.btn_entity_search = QPushButton("搜索")
+        mark_secondary(self.btn_entity_search)
         self.btn_entity_search.clicked.connect(self._search_entities)
         self.btn_entity_search.setMinimumWidth(76)
         search_bar.addWidget(self.btn_entity_search)
@@ -325,6 +326,7 @@ class DashboardPanel(QWidget):
         fusion_hint.setWordWrap(True)
         fusion_header.addWidget(fusion_hint, 1)
         self.btn_export_fusion = QPushButton("导出融合报告")
+        mark_secondary(self.btn_export_fusion)
         self.btn_export_fusion.clicked.connect(self._export_fusion_report)
         fusion_header.addWidget(self.btn_export_fusion)
         fusion_layout.addLayout(fusion_header)

@@ -14,6 +14,7 @@ from core.document_workflow import DocumentWorkflow
 from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
 from core.entity_extractor import EntityExtractor
 from config import CRAWLED_DIR
+from ui.components import mark_secondary
 from ui.task_runner import ProgressTaskWorker, TaskWorker
 from logger import get_logger
 
@@ -93,11 +94,13 @@ class CrawlerPanel(QWidget):
         settings_layout.addWidget(self.btn_crawl)
 
         self.btn_gen_docs = QPushButton("生成测试文档")
+        mark_secondary(self.btn_gen_docs)
         self.btn_gen_docs.clicked.connect(self._generate_docs)
         self.btn_gen_docs.setEnabled(False)
         settings_layout.addWidget(self.btn_gen_docs)
 
         self.btn_import = QPushButton("导入到数据库")
+        mark_secondary(self.btn_import)
         self.btn_import.clicked.connect(self._import_to_db)
         self.btn_import.setEnabled(False)
         settings_layout.addWidget(self.btn_import)
@@ -134,11 +137,11 @@ class CrawlerPanel(QWidget):
         table_bar.addWidget(QLabel("爬取结果:"))
         table_bar.addStretch()
         self.btn_select_all = QPushButton("全选")
-        self.btn_select_all.setObjectName("secondary")
+        mark_secondary(self.btn_select_all)
         self.btn_select_all.setFixedWidth(60)
         self.btn_select_all.clicked.connect(self._select_all)
         self.btn_deselect_all = QPushButton("取消全选")
-        self.btn_deselect_all.setObjectName("secondary")
+        mark_secondary(self.btn_deselect_all)
         self.btn_deselect_all.setFixedWidth(80)
         self.btn_deselect_all.clicked.connect(self._deselect_all)
         table_bar.addWidget(self.btn_select_all)

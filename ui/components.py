@@ -3,6 +3,27 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QPushButton, QProgressBar, QVBoxLayout, QWidget
 
 
+def mark_primary(button: QPushButton) -> QPushButton:
+    """Mark a button as the main action in its local workflow."""
+
+    button.setObjectName("")
+    return button
+
+
+def mark_secondary(button: QPushButton) -> QPushButton:
+    """Mark a button as a supporting action."""
+
+    button.setObjectName("secondary")
+    return button
+
+
+def mark_danger(button: QPushButton) -> QPushButton:
+    """Mark a button as destructive or reset-oriented."""
+
+    button.setObjectName("danger")
+    return button
+
+
 class EmptyState(QWidget):
     """Consistent empty-state block for panels and dashboards."""
 

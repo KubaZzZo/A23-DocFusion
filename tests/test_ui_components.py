@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QProgressBar
 
-from ui.components import EmptyState, set_busy_state
+from ui.components import EmptyState, mark_danger, mark_primary, mark_secondary, set_busy_state
 
 _APP = None
 
@@ -67,11 +67,33 @@ def test_set_busy_state_updates_button_progress_and_optional_label():
 def test_fill_panel_uses_shared_empty_state_and_busy_helper():
     source = Path("ui/fill_panel.py").read_text(encoding="utf-8")
 
-    assert "from ui.components import EmptyState, set_busy_state" in source
+    assert "from ui.components import EmptyState, mark_secondary, set_busy_state" in source
     assert "self.empty_state = EmptyState(" in source
     assert "self.lbl_empty_hint" not in source
     assert "set_busy_state(self.btn_fill, self.progress, True" in source
     assert "set_busy_state(self.btn_fill, self.progress, False" in source
+
+
+def test_button_role_helpers_assign_expected_object_names():
+    _qt_app()
+    primary = QPushButton("执行")
+    secondary = QPushButton("刷新")
+    danger = QPushButton("清除")
+
+    mark_primary(primary)
+    mark_secondary(secondary)
+    mark_danger(danger)
+
+    assert primary.objectName() == ""
+    assert secondary.objectName() == "secondary"
+    assert danger.objectName() == "danger"
+
+
+def test_styles_define_secondary_and_danger_button_roles():
+    source = Path("ui/styles.py").read_text(encoding="utf-8")
+
+    assert 'QPushButton[objectName="secondary"]' in source
+    assert 'QPushButton[objectName="danger"]' in source
 
 
 def test_dashboard_panel_uses_shared_empty_state_for_distribution_sections():

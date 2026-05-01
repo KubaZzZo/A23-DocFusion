@@ -292,6 +292,18 @@ QPushButton[objectName="secondary"]:hover {{
 QPushButton[objectName="secondary"]:pressed {{
     background-color: {TABLE_ROW_ALT};
 }}
+QPushButton[objectName="danger"] {{
+    background-color: {BG_CARD};
+    color: {DANGER};
+    border: 1px solid #FFD6D6;
+}}
+QPushButton[objectName="danger"]:hover {{
+    background-color: #FFF1F0;
+    border-color: {DANGER};
+}}
+QPushButton[objectName="danger"]:pressed {{
+    background-color: #FFE5E3;
+}}
 
 /* ===== 标签 ===== */
 QLabel {{

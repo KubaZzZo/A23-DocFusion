@@ -11,7 +11,7 @@ from core.template_filler import TemplateFiller
 from core.template_workflow import TemplateWorkflow
 from core.semantic_matcher import SemanticMatcher
 from db.database import EntityDAO
-from ui.components import EmptyState, set_busy_state
+from ui.components import EmptyState, mark_secondary, set_busy_state
 from ui.fill_confirm_dialog import FillConfirmDialog
 from ui.task_runner import TaskWorker
 import os
@@ -30,6 +30,7 @@ class FillPanel(QWidget):
         # 模板选择
         tpl_bar = QHBoxLayout()
         self.btn_open_tpl = QPushButton("选择模板表格")
+        mark_secondary(self.btn_open_tpl)
         self.btn_open_tpl.clicked.connect(self._open_template)
         self.lbl_tpl = QLabel("未选择模板")
         tpl_bar.addWidget(self.btn_open_tpl)
@@ -53,6 +54,7 @@ class FillPanel(QWidget):
         entities_group = QGroupBox("数据库中的实体")
         entities_layout = QVBoxLayout(entities_group)
         self.btn_refresh = QPushButton("刷新实体列表")
+        mark_secondary(self.btn_refresh)
         self.btn_refresh.clicked.connect(self._refresh_entities)
         entities_layout.addWidget(self.btn_refresh)
         self.entity_table = QTableWidget()
@@ -114,6 +116,7 @@ class FillPanel(QWidget):
         right_layout.addWidget(self.empty_state, 1)
 
         self.btn_open_result = QPushButton("打开结果文件")
+        mark_secondary(self.btn_open_result)
         self.btn_open_result.clicked.connect(self._open_result)
         self.btn_open_result.setEnabled(False)
         right_layout.addWidget(self.btn_open_result)

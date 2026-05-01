@@ -11,6 +11,7 @@ from core.doc_commander import DocCommander
 from core.document_workflow import DocumentWorkflow
 from core.document_parser import DocumentParser
 from db.database import DocumentDAO
+from ui.components import mark_secondary
 from ui.task_runner import TaskWorker
 from logger import get_logger
 
@@ -32,6 +33,7 @@ class DocPanel(QWidget):
         # 上方：文件选择 + 元信息
         file_bar = QHBoxLayout()
         self.btn_open = QPushButton("打开文档")
+        mark_secondary(self.btn_open)
         self.btn_open.clicked.connect(self._open_file)
         self.lbl_file = QLabel("未选择文件")
         self.lbl_file.setStyleSheet("color: #888; background: transparent; padding: 0 8px;")

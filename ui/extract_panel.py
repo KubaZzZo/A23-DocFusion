@@ -12,6 +12,7 @@ from PyQt6.QtGui import QColor, QFont
 from core.document_workflow import DocumentWorkflow
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
+from ui.components import mark_danger, mark_secondary
 from ui.task_runner import ProgressTaskWorker, TaskWorker
 
 # 实体类型颜色映射
@@ -55,8 +56,10 @@ class ExtractPanel(QWidget):
         # 文件选择栏
         file_bar = QHBoxLayout()
         self.btn_open = QPushButton("选择文档")
+        mark_secondary(self.btn_open)
         self.btn_open.clicked.connect(self._open_file)
         self.btn_batch = QPushButton("批量提取")
+        mark_secondary(self.btn_batch)
         self.btn_batch.clicked.connect(self._open_batch_files)
         self.lbl_file = QLabel("未选择文件")
         self.lbl_file.setStyleSheet("color: #888; background: transparent; padding: 0 8px;")
@@ -94,14 +97,17 @@ class ExtractPanel(QWidget):
         action_bar = QHBoxLayout()
         action_bar.addWidget(self.btn_extract)
         self.btn_reextract = QPushButton("清除并重新提取")
+        mark_danger(self.btn_reextract)
         self.btn_reextract.clicked.connect(self._clear_and_reextract)
         self.btn_reextract.setEnabled(False)
         action_bar.addWidget(self.btn_reextract)
         self.btn_export_csv = QPushButton("导出CSV")
+        mark_secondary(self.btn_export_csv)
         self.btn_export_csv.clicked.connect(lambda: self._export_entities("csv"))
         self.btn_export_csv.setEnabled(False)
         action_bar.addWidget(self.btn_export_csv)
         self.btn_export_xlsx = QPushButton("导出Excel")
+        mark_secondary(self.btn_export_xlsx)
         self.btn_export_xlsx.clicked.connect(lambda: self._export_entities("xlsx"))
         self.btn_export_xlsx.setEnabled(False)
         action_bar.addWidget(self.btn_export_xlsx)
