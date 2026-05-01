@@ -21,6 +21,7 @@ from ui.dashboard_panel import DashboardPanel
 from ui.settings_dialog import SettingsDialog, apply_saved_settings
 from ui.styles import GLOBAL_QSS, BG_MAIN, BG_CARD, TEXT_PRIMARY, TEXT_SECONDARY, PRIMARY, BORDER
 from config import LLM_CONFIG
+from llm.provider_presets import get_cloud_vendor_preset
 
 
 def _svg_icon(svg_str: str, size: int = 20) -> QIcon:
@@ -91,6 +92,33 @@ ICON_SETTINGS = f'''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="2
 </svg>'''
 
 
+def _llm_status_snapshot(config: dict | None = None) -> dict:
+    """Build user-facing LLM status text from runtime config."""
+
+    cfg = config or LLM_CONFIG
+    provider = cfg.get("provider", "ollama")
+    if provider == "ollama":
+        ollama = cfg.get("ollama", {})
+        label = "Ollama"
+        model = ollama.get("model") or "未配置模型"
+        url = ollama.get("base_url") or "http://localhost:11434"
+    else:
+        cloud = cfg.get("openai", {})
+        preset = get_cloud_vendor_preset(cloud.get("vendor", "openai"))
+        label = preset.get("label", cloud.get("vendor", "OpenAI兼容"))
+        model = cloud.get("model") or preset.get("model_placeholder") or "未配置模型"
+        url = cloud.get("base_url") or preset.get("base_url") or "未配置地址"
+
+    return {
+        "provider": provider,
+        "label": label,
+        "model": model,
+        "url": url,
+        "summary": f"{label} · {model}",
+        "tooltip": f"当前 LLM: {label}\n模型: {model}\n服务地址: {url}",
+    }
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -148,6 +176,13 @@ class MainWindow(QMainWindow):
         self.lbl_llm_status = QLabel("● 就绪")
         self.lbl_llm_status.setStyleSheet("font-size: 11px; color: #52C41A; background: transparent;")
         top_layout.addWidget(self.lbl_llm_status)
+        self.lbl_llm_model = QLabel("")
+        self.lbl_llm_model.setStyleSheet("font-size: 12px; color: #333; background: transparent; font-weight: 600;")
+        top_layout.addWidget(self.lbl_llm_model)
+        self.lbl_llm_endpoint = QLabel("")
+        self.lbl_llm_endpoint.setStyleSheet("font-size: 11px; color: #888; background: transparent;")
+        top_layout.addWidget(self.lbl_llm_endpoint)
+        self._refresh_llm_status()
 
         top_layout.addStretch()
 
@@ -196,13 +231,24 @@ class MainWindow(QMainWindow):
     def _on_llm_changed(self, index):
         LLM_CONFIG["provider"] = "ollama" if index == 0 else "openai"
         provider = LLM_CONFIG["provider"]
-        self.lbl_llm_status.setText(f"● 已切换")
+        self.lbl_llm_status.setText("? ???")
         self.lbl_llm_status.setStyleSheet("font-size: 11px; color: #FAAD14; background: transparent;")
-        self.statusBar().showMessage(f"已切换LLM引擎: {provider}")
+        self._refresh_llm_status()
+        self.statusBar().showMessage(f"???LLM??: {provider}")
 
     def _open_settings(self):
         dlg = SettingsDialog(self)
         dlg.exec()
+        self._refresh_llm_status()
+
+    def _refresh_llm_status(self):
+        snapshot = _llm_status_snapshot()
+        self.lbl_llm_model.setText(snapshot["summary"])
+        self.lbl_llm_endpoint.setText(snapshot["url"])
+        tooltip = snapshot["tooltip"]
+        self.lbl_llm_status.setToolTip(tooltip)
+        self.lbl_llm_model.setToolTip(tooltip)
+        self.lbl_llm_endpoint.setToolTip(tooltip)
 
     def _on_tab_changed(self, index):
         if index == 0:
