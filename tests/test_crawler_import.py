@@ -66,6 +66,8 @@ class FakeEntityDAO:
 
 
 class FakeDocumentWorkflow:
+    parse_calls = 0
+
     def __init__(self, upload_dir: Path):
         self.upload_dir = Path(upload_dir)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +79,7 @@ class FakeDocumentWorkflow:
         return {"id": doc.id, "filename": doc.filename, "file_type": doc.file_type, "path": doc.file_path}
 
     def parse_document(self, doc_id: int):
+        FakeDocumentWorkflow.parse_calls += 1
         doc = next(d for d in FakeDocumentDAO.docs if d.id == doc_id)
         raw_text = Path(doc.file_path).read_text(encoding="utf-8")
         FakeDocumentDAO.update_text(doc_id, raw_text)
@@ -88,6 +91,7 @@ def setup_function():
     FakeArticleDAO.articles = []
     FakeEntityDAO.batches = []
     FakeExtractor.instances = 0
+    FakeDocumentWorkflow.parse_calls = 0
 
 
 def make_test_crawled_dir() -> Path:
@@ -114,7 +118,7 @@ def test_import_task_stores_crawled_article_as_real_file(monkeypatch):
     }
 
     progress_events = []
-    entity_count = CrawlerPanel._run_import_task([article], progress_events.append)
+    result = CrawlerPanel._run_import_task([article], progress_events.append)
 
     docs = FakeDocumentDAO.get_all()
     assert len(docs) == 1
@@ -122,7 +126,9 @@ def test_import_task_stores_crawled_article_as_real_file(monkeypatch):
     assert doc_path.exists()
     assert doc_path.name != "crawled"
     assert doc_path.read_text(encoding="utf-8") == article["content"]
-    assert entity_count == 0
+    assert docs[0].raw_text == article["content"]
+    assert FakeDocumentWorkflow.parse_calls == 0
+    assert result == {"entity_count": 0, "processed": 1, "total": 1, "cancelled": False}
     assert progress_events == [{"current": 1, "total": 1}]
 
 
@@ -157,3 +163,41 @@ def test_import_task_reuses_single_extractor_for_multiple_articles(monkeypatch):
     CrawlerPanel._run_import_task(articles, lambda event: None)
 
     assert FakeExtractor.instances == 1
+
+
+def test_import_task_stops_when_cancel_requested_between_articles(monkeypatch):
+    monkeypatch.setattr(crawler_panel, "EntityExtractor", FakeExtractor)
+    monkeypatch.setattr(crawler_panel, "DocumentDAO", FakeDocumentDAO)
+    monkeypatch.setattr(crawler_panel, "CrawledArticleDAO", FakeArticleDAO)
+    monkeypatch.setattr(crawler_panel, "EntityDAO", FakeEntityDAO)
+    monkeypatch.setattr(crawler_panel, "DocumentWorkflow", FakeDocumentWorkflow)
+    monkeypatch.setattr(crawler_panel, "CRAWLED_DIR", make_test_crawled_dir())
+    articles = [
+        {
+            "title": "文章1",
+            "author": "作者",
+            "source": "来源",
+            "url": "http://example.com/1",
+            "publish_date": "2026-04-14",
+            "content": "正文1",
+            "category": "测试",
+        },
+        {
+            "title": "文章2",
+            "author": "作者",
+            "source": "来源",
+            "url": "http://example.com/2",
+            "publish_date": "2026-04-14",
+            "content": "正文2",
+            "category": "测试",
+        },
+    ]
+    progress_events = []
+
+    def cancel_after_first():
+        return bool(progress_events)
+
+    result = CrawlerPanel._run_import_task(articles, progress_events.append, cancel_after_first)
+
+    assert result == {"entity_count": 0, "processed": 1, "total": 2, "cancelled": True}
+    assert len(FakeDocumentDAO.get_all()) == 1

@@ -278,14 +278,22 @@ class CrawlerPanel(QWidget):
     def _import_to_db(self):
         if not self.crawled_articles:
             return
-        self.btn_import.setEnabled(False)
-        self.btn_import.setText("导入中...")
+        self.btn_import.setText("????")
+        try:
+            self.btn_import.clicked.disconnect()
+        except TypeError:
+            pass
+        self.btn_import.clicked.connect(self._cancel_import)
         self.progress.setVisible(True)
         self.progress.setRange(0, len(self.crawled_articles))
-        self._log("开始导入数据库并提取实体...")
+        self._log("????????????...")
 
         self.import_worker = ProgressTaskWorker(
-            lambda progress: self._run_import_task(self.crawled_articles, progress),
+            lambda progress: self._run_import_task(
+                self.crawled_articles,
+                progress,
+                lambda: self.import_worker.isInterruptionRequested(),
+            ),
             error_prefix="crawler import",
         )
         self.import_worker.progress.connect(self._on_import_progress_event)
@@ -293,10 +301,19 @@ class CrawlerPanel(QWidget):
         self.import_worker.failed.connect(self._on_import_error)
         self.import_worker.start()
 
+    def _cancel_import(self):
+        if hasattr(self, "import_worker") and self.import_worker.isRunning():
+            self.import_worker.requestInterruption()
+            self.btn_import.setEnabled(False)
+            self.btn_import.setText("????...")
+            self.lbl_status.setText("?????????????????")
+            self._log("???????")
+
     @staticmethod
-    def _run_import_task(articles: list[dict], progress) -> int:
+    def _run_import_task(articles: list[dict], progress, should_cancel=None) -> dict:
         total = len(articles)
         entity_count = 0
+        processed = 0
         if articles:
             CrawledArticleDAO.create_batch(articles)
         loop = asyncio.new_event_loop()
@@ -304,13 +321,15 @@ class CrawlerPanel(QWidget):
             extractor = EntityExtractor()
             document_workflow = DocumentWorkflow(upload_dir=CRAWLED_DIR)
             for i, article in enumerate(articles):
+                if should_cancel and should_cancel():
+                    return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": True}
                 content = article.get("content", "")
                 if content:
                     title = article.get("title", "article")
                     digest = uuid4().hex[:8]
                     filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
                     uploaded = document_workflow.upload_document(filename, content.encode("utf-8"))
-                    document_workflow.parse_document(uploaded["id"])
+                    DocumentDAO.update_text(uploaded["id"], content)
                     doc = DocumentDAO.get_by_id(uploaded["id"])
                     try:
                         result = loop.run_until_complete(extractor.extract(content))
@@ -319,33 +338,53 @@ class CrawlerPanel(QWidget):
                             EntityDAO.create_batch(doc.id, entities)
                             entity_count += len(entities)
                     except Exception as e:
-                        log.warning("瀵煎叆鐖彇鏂囩珷鏃跺疄浣撴彁鍙栧け璐? %s - %s", article.get("title", ""), e)
+                        log.warning("????????????? %s - %s", article.get("title", ""), e)
+                processed = i + 1
                 progress({"current": i + 1, "total": total})
-            return entity_count
+            return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": False}
         finally:
             loop.close()
 
-    def _on_import_progress_event(self, event: dict):
-        current = event.get("current", 0)
-        total = event.get("total", 0)
-        self.progress.setValue(current)
-        self.lbl_status.setText(f"导入中: {current}/{total}")
-
-    def _on_import_done(self, entity_count: int):
-        self.progress.setVisible(False)
+    def _restore_import_button(self):
         self.btn_import.setEnabled(True)
-        self.btn_import.setText("导入到数据库")
-        self.lbl_status.setText(f"导入完成，提取了 {entity_count} 个实体")
-        self._log(f"导入完成: {len(self.crawled_articles)} 篇文章, {entity_count} 个实体")
-        QMessageBox.information(self, "完成",
-                                f"已导入 {len(self.crawled_articles)} 篇文章\n提取了 {entity_count} 个实体")
+        self.btn_import.setText("??????")
+        try:
+            self.btn_import.clicked.disconnect()
+        except TypeError:
+            pass
+        self.btn_import.clicked.connect(self._import_to_db)
+
+    def _on_import_done(self, result):
+        self.progress.setVisible(False)
+        self._restore_import_button()
+        if isinstance(result, dict):
+            entity_count = result.get("entity_count", 0)
+            processed = result.get("processed", len(self.crawled_articles))
+            total = result.get("total", len(self.crawled_articles))
+            if result.get("cancelled"):
+                self.lbl_status.setText(f"?????: {processed}/{total}")
+                self._log(f"?????: processed={processed}/{total}, entities={entity_count}")
+                QMessageBox.information(
+                    self,
+                    "???",
+                    f"?????\n??? {processed}/{total} ???\n?? {entity_count} ???",
+                )
+                return
+        else:
+            entity_count = result
+        self.lbl_status.setText(f"???????? {entity_count} ???")
+        self._log(f"????: articles={len(self.crawled_articles)}, entities={entity_count}")
+        QMessageBox.information(
+            self,
+            "??",
+            f"??? {len(self.crawled_articles)} ???\n??? {entity_count} ???",
+        )
 
     def _on_import_error(self, msg: str):
         self.progress.setVisible(False)
-        self.btn_import.setEnabled(True)
-        self.btn_import.setText("导入到数据库")
-        self._log(f"导入错误: {msg}")
-        QMessageBox.critical(self, "导入失败", msg)
+        self._restore_import_button()
+        self._log(f"????: {msg}")
+        QMessageBox.critical(self, "????", msg)
 
     def _select_all(self):
         self.result_table.selectAll()
