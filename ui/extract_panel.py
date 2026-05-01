@@ -7,12 +7,12 @@ from PyQt6.QtWidgets import (
     QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QSplitter,
     QProgressBar, QMessageBox, QHeaderView, QGroupBox, QFrame
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from core.document_workflow import DocumentWorkflow
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
-from ui.task_runner import TaskWorker
+from ui.task_runner import ProgressTaskWorker, TaskWorker
 
 # 实体类型颜色映射
 ENTITY_COLORS = {
@@ -26,58 +26,6 @@ ENTITY_COLORS = {
     "id_number":    ("#FA8C16", "#FFF4E6", "编号"),
     "custom":       ("#8C8C8C", "#F5F5F5", "其他"),
 }
-
-
-class BatchExtractWorker(QThread):
-    """批量文档解析与实体提取线程"""
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(dict)
-    error = pyqtSignal(str)
-
-    def __init__(self, paths: list[str]):
-        super().__init__()
-        self.paths = paths
-
-    def run(self):
-        loop = asyncio.new_event_loop()
-        try:
-            extractor = EntityExtractor()
-            all_entities = []
-            docs_count = 0
-            failures = []
-            total = len(self.paths)
-            document_workflow = DocumentWorkflow()
-
-            for i, path in enumerate(self.paths, start=1):
-                src_path = Path(path)
-                self.progress.emit(i, total, src_path.name)
-                try:
-                    uploaded = document_workflow.upload_document(src_path.name, src_path.read_bytes())
-                    document_workflow.parse_document(uploaded["id"])
-                    doc = DocumentDAO.get_by_id(uploaded["id"])
-                    text = doc.raw_text or ""
-
-                    result = loop.run_until_complete(extractor.extract(text))
-                    entities = result.get("entities", [])
-                    if entities:
-                        EntityDAO.create_batch(doc.id, entities)
-                        for entity in entities:
-                            entity = dict(entity)
-                            entity["document"] = src_path.name
-                            all_entities.append(entity)
-                    docs_count += 1
-                except Exception as e:
-                    failures.append({"filename": src_path.name, "error": str(e)})
-
-            self.finished.emit({
-                "documents": docs_count,
-                "entities": all_entities,
-                "failures": failures,
-            })
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 def _type_badge(entity_type: str) -> QLabel:
@@ -272,11 +220,54 @@ class ExtractPanel(QWidget):
         self.summary_frame.setVisible(False)
         self.stats_bar_widget.setVisible(False)
 
-        self.batch_worker = BatchExtractWorker(paths)
-        self.batch_worker.progress.connect(self._on_batch_progress)
-        self.batch_worker.finished.connect(self._on_batch_done)
-        self.batch_worker.error.connect(self._on_batch_error)
+        self.batch_worker = ProgressTaskWorker(
+            lambda progress: self._run_batch_extract_task(paths, progress),
+            error_prefix="batch entity extraction",
+        )
+        self.batch_worker.progress.connect(self._on_batch_progress_event)
+        self.batch_worker.succeeded.connect(self._on_batch_done)
+        self.batch_worker.failed.connect(self._on_batch_error)
         self.batch_worker.start()
+
+    @staticmethod
+    def _run_batch_extract_task(paths: list[str], progress) -> dict:
+        loop = asyncio.new_event_loop()
+        try:
+            extractor = EntityExtractor()
+            all_entities = []
+            docs_count = 0
+            failures = []
+            total = len(paths)
+            document_workflow = DocumentWorkflow()
+
+            for i, path in enumerate(paths, start=1):
+                src_path = Path(path)
+                progress({"current": i, "total": total, "filename": src_path.name})
+                try:
+                    uploaded = document_workflow.upload_document(src_path.name, src_path.read_bytes())
+                    document_workflow.parse_document(uploaded["id"])
+                    doc = DocumentDAO.get_by_id(uploaded["id"])
+                    text = doc.raw_text or ""
+
+                    result = loop.run_until_complete(extractor.extract(text))
+                    entities = result.get("entities", [])
+                    if entities:
+                        EntityDAO.create_batch(doc.id, entities)
+                        for entity in entities:
+                            entity = dict(entity)
+                            entity["document"] = src_path.name
+                            all_entities.append(entity)
+                    docs_count += 1
+                except Exception as e:
+                    failures.append({"filename": src_path.name, "error": str(e)})
+
+            return {
+                "documents": docs_count,
+                "entities": all_entities,
+                "failures": failures,
+            }
+        finally:
+            loop.close()
 
     def _start_extract(self):
         if not self.current_doc or not self.current_doc.raw_text:
@@ -401,7 +392,10 @@ class ExtractPanel(QWidget):
         self._render_entities(entities)
         QMessageBox.information(self, "提取完成", f"共提取 {len(entities)} 个实体")
 
-    def _on_batch_progress(self, current: int, total: int, filename: str):
+    def _on_batch_progress_event(self, event: dict):
+        current = event.get("current", 0)
+        total = event.get("total", 0)
+        filename = event.get("filename", "")
         self.progress.setValue(current)
         self.lbl_doc_info.setText(f"批量提取进度: {current}/{total}  |  {filename}")
 

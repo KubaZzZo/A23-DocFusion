@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from ui import crawler_panel
-from ui.crawler_panel import ImportWorker
+from ui.crawler_panel import CrawlerPanel
 
 
 class FakeExtractor:
@@ -42,6 +42,10 @@ class FakeDocumentDAO:
     @classmethod
     def get_all(cls):
         return list(cls.docs)
+
+    @classmethod
+    def get_by_id(cls, doc_id: int):
+        return next((doc for doc in cls.docs if doc.id == doc_id), None)
 
 
 class FakeArticleDAO:
@@ -92,7 +96,7 @@ def make_test_crawled_dir() -> Path:
     return test_dir
 
 
-def test_import_worker_stores_crawled_article_as_real_file(monkeypatch):
+def test_import_task_stores_crawled_article_as_real_file(monkeypatch):
     monkeypatch.setattr(crawler_panel, "EntityExtractor", FakeExtractor)
     monkeypatch.setattr(crawler_panel, "DocumentDAO", FakeDocumentDAO)
     monkeypatch.setattr(crawler_panel, "CrawledArticleDAO", FakeArticleDAO)
@@ -109,8 +113,8 @@ def test_import_worker_stores_crawled_article_as_real_file(monkeypatch):
         "category": "测试",
     }
 
-    worker = ImportWorker([article])
-    worker.run()
+    progress_events = []
+    entity_count = CrawlerPanel._run_import_task([article], progress_events.append)
 
     docs = FakeDocumentDAO.get_all()
     assert len(docs) == 1
@@ -118,9 +122,11 @@ def test_import_worker_stores_crawled_article_as_real_file(monkeypatch):
     assert doc_path.exists()
     assert doc_path.name != "crawled"
     assert doc_path.read_text(encoding="utf-8") == article["content"]
+    assert entity_count == 0
+    assert progress_events == [{"current": 1, "total": 1}]
 
 
-def test_import_worker_reuses_single_extractor_for_multiple_articles(monkeypatch):
+def test_import_task_reuses_single_extractor_for_multiple_articles(monkeypatch):
     monkeypatch.setattr(crawler_panel, "EntityExtractor", FakeExtractor)
     monkeypatch.setattr(crawler_panel, "DocumentDAO", FakeDocumentDAO)
     monkeypatch.setattr(crawler_panel, "CrawledArticleDAO", FakeArticleDAO)
@@ -148,7 +154,6 @@ def test_import_worker_reuses_single_extractor_for_multiple_articles(monkeypatch
         },
     ]
 
-    worker = ImportWorker(articles)
-    worker.run()
+    CrawlerPanel._run_import_task(articles, lambda event: None)
 
     assert FakeExtractor.instances == 1

@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtWidgets import QPushButton, QProgressBar, QApplication
 
-from ui.task_runner import TaskWorker
+from ui.task_runner import ProgressTaskWorker, TaskWorker
 
 _APP = None
 
@@ -42,6 +42,16 @@ def test_task_runner_defines_shared_worker_contract():
     assert "log.exception" in source
 
 
+def test_progress_task_runner_defines_shared_worker_contract():
+    source = Path("ui/task_runner.py").read_text(encoding="utf-8")
+
+    assert "class ProgressTaskWorker(QThread)" in source
+    assert "progress = pyqtSignal(object)" in source
+    assert "succeeded = pyqtSignal(object)" in source
+    assert "failed = pyqtSignal(str)" in source
+    assert "self._task(self._emit_progress)" in source
+
+
 def test_task_worker_emits_succeeded_for_successful_task():
     received = []
     worker = TaskWorker(lambda: {"ok": True})
@@ -64,6 +74,43 @@ def test_task_worker_emits_failed_for_raised_exception():
     _wait_for_worker(worker)
 
     assert received == ["boom"]
+
+
+def test_progress_task_worker_emits_progress_and_succeeded_for_successful_task():
+    progress_events = []
+    results = []
+
+    def task(progress):
+        progress({"current": 1, "total": 2, "label": "a.txt"})
+        progress({"current": 2, "total": 2, "label": "b.txt"})
+        return {"ok": True}
+
+    worker = ProgressTaskWorker(task)
+    worker.progress.connect(progress_events.append)
+    worker.succeeded.connect(results.append)
+
+    _wait_for_worker(worker)
+
+    assert progress_events == [
+        {"current": 1, "total": 2, "label": "a.txt"},
+        {"current": 2, "total": 2, "label": "b.txt"},
+    ]
+    assert results == [{"ok": True}]
+
+
+def test_progress_task_worker_emits_failed_for_raised_exception():
+    received = []
+
+    def task(progress):
+        progress({"current": 1})
+        raise RuntimeError("progress boom")
+
+    worker = ProgressTaskWorker(task)
+    worker.failed.connect(received.append)
+
+    _wait_for_worker(worker)
+
+    assert received == ["progress boom"]
 
 
 def test_ui_error_callback_can_restore_button_and_progress_state():
@@ -127,9 +174,11 @@ def test_extract_panel_uses_shared_task_worker_for_single_extract():
 
     assert "from core.document_workflow import DocumentWorkflow" in source
     assert "safe_copy" not in source
-    assert "from ui.task_runner import TaskWorker" in source
     assert "class ExtractWorker" not in source
-    assert "BatchExtractWorker" in source
+    assert "from ui.task_runner import ProgressTaskWorker, TaskWorker" in source
+    assert "class BatchExtractWorker" not in source
+    assert "self.batch_worker = ProgressTaskWorker(" in source
+    assert "self.batch_worker.progress.connect(self._on_batch_progress_event)" in source
     assert "self.worker = TaskWorker(" in source
     assert "self.worker.succeeded.connect(self._on_extract_done)" in source
     assert "self.worker.failed.connect(self._on_extract_error)" in source
@@ -141,10 +190,12 @@ def test_crawler_panel_uses_shared_task_worker_for_document_generation():
     assert "from core.document_workflow import DocumentWorkflow" in source
     assert "file_path.write_text" not in source
     assert "DocumentDAO.create" not in source
-    assert "from ui.task_runner import TaskWorker" in source
+    assert "from ui.task_runner import ProgressTaskWorker, TaskWorker" in source
     assert "class DocGenWorker" not in source
     assert "CrawlWorker" in source
-    assert "ImportWorker" in source
+    assert "class ImportWorker" not in source
+    assert "self.import_worker = ProgressTaskWorker(" in source
+    assert "self.import_worker.progress.connect(self._on_import_progress_event)" in source
     assert "self.gen_worker = TaskWorker(" in source
     assert "self.gen_worker.succeeded.connect(self._on_gen_done)" in source
     assert "self.gen_worker.failed.connect(self._on_gen_error)" in source

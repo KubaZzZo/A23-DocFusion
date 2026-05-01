@@ -12,13 +12,10 @@ from crawler.doc_generator import DocGenerator
 from crawler.doc_generator import _safe_filename
 from core.document_workflow import DocumentWorkflow
 from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
-from core.document_parser import DocumentParser
 from core.entity_extractor import EntityExtractor
 from config import CRAWLED_DIR
-from ui.task_runner import TaskWorker
+from ui.task_runner import ProgressTaskWorker, TaskWorker
 from logger import get_logger
-import shutil
-from pathlib import Path
 
 log = get_logger("ui.crawler_panel")
 
@@ -54,52 +51,6 @@ class CrawlWorker(QThread):
         finally:
             if spider:
                 spider.close()
-
-
-class ImportWorker(QThread):
-    """导入数据库 + 实体提取线程"""
-    progress = pyqtSignal(int, int)
-    finished = pyqtSignal(int)
-    error = pyqtSignal(str)
-
-    def __init__(self, articles: list[dict]):
-        super().__init__()
-        self.articles = articles
-
-    def run(self):
-        try:
-            total = len(self.articles)
-            entity_count = 0
-            if self.articles:
-                CrawledArticleDAO.create_batch(self.articles)
-            loop = asyncio.new_event_loop()
-            extractor = EntityExtractor()
-            document_workflow = DocumentWorkflow(upload_dir=CRAWLED_DIR)
-            for i, a in enumerate(self.articles):
-                # 同时存入 Document 表并提取实体
-                content = a.get("content", "")
-                if content:
-                    title = a.get("title", "article")
-                    digest = uuid4().hex[:8]
-                    filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
-                    uploaded = document_workflow.upload_document(filename, content.encode("utf-8"))
-                    document_workflow.parse_document(uploaded["id"])
-                    doc = DocumentDAO.get_by_id(uploaded["id"])
-                    try:
-                        result = loop.run_until_complete(extractor.extract(content))
-                        entities = result.get("entities", [])
-                        if entities:
-                            EntityDAO.create_batch(doc.id, entities)
-                            entity_count += len(entities)
-                    except Exception as e:
-                        log.warning("导入爬取文章时实体提取失败: %s - %s", a.get("title", ""), e)
-                self.progress.emit(i + 1, total)
-            self.finished.emit(entity_count)
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            if "loop" in locals():
-                loop.close()
 
 
 class CrawlerPanel(QWidget):
@@ -329,13 +280,50 @@ class CrawlerPanel(QWidget):
         self.progress.setRange(0, len(self.crawled_articles))
         self._log("开始导入数据库并提取实体...")
 
-        self.import_worker = ImportWorker(self.crawled_articles)
-        self.import_worker.progress.connect(self._on_import_progress)
-        self.import_worker.finished.connect(self._on_import_done)
-        self.import_worker.error.connect(self._on_import_error)
+        self.import_worker = ProgressTaskWorker(
+            lambda progress: self._run_import_task(self.crawled_articles, progress),
+            error_prefix="crawler import",
+        )
+        self.import_worker.progress.connect(self._on_import_progress_event)
+        self.import_worker.succeeded.connect(self._on_import_done)
+        self.import_worker.failed.connect(self._on_import_error)
         self.import_worker.start()
 
-    def _on_import_progress(self, current: int, total: int):
+    @staticmethod
+    def _run_import_task(articles: list[dict], progress) -> int:
+        total = len(articles)
+        entity_count = 0
+        if articles:
+            CrawledArticleDAO.create_batch(articles)
+        loop = asyncio.new_event_loop()
+        try:
+            extractor = EntityExtractor()
+            document_workflow = DocumentWorkflow(upload_dir=CRAWLED_DIR)
+            for i, article in enumerate(articles):
+                content = article.get("content", "")
+                if content:
+                    title = article.get("title", "article")
+                    digest = uuid4().hex[:8]
+                    filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
+                    uploaded = document_workflow.upload_document(filename, content.encode("utf-8"))
+                    document_workflow.parse_document(uploaded["id"])
+                    doc = DocumentDAO.get_by_id(uploaded["id"])
+                    try:
+                        result = loop.run_until_complete(extractor.extract(content))
+                        entities = result.get("entities", [])
+                        if entities:
+                            EntityDAO.create_batch(doc.id, entities)
+                            entity_count += len(entities)
+                    except Exception as e:
+                        log.warning("瀵煎叆鐖彇鏂囩珷鏃跺疄浣撴彁鍙栧け璐? %s - %s", article.get("title", ""), e)
+                progress({"current": i + 1, "total": total})
+            return entity_count
+        finally:
+            loop.close()
+
+    def _on_import_progress_event(self, event: dict):
+        current = event.get("current", 0)
+        total = event.get("total", 0)
         self.progress.setValue(current)
         self.lbl_status.setText(f"导入中: {current}/{total}")
 
