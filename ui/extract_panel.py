@@ -12,7 +12,7 @@ from PyQt6.QtGui import QColor, QFont
 from core.document_workflow import DocumentWorkflow
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
-from ui.components import mark_danger, mark_secondary
+from ui.components import apply_panel_density, mark_danger, mark_secondary
 from ui.task_runner import ProgressTaskWorker, TaskWorker
 
 # 实体类型颜色映射
@@ -51,7 +51,7 @@ class ExtractPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        apply_panel_density(layout)
 
         # 文件选择栏
         file_bar = QHBoxLayout()

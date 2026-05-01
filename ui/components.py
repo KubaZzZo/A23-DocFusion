@@ -1,6 +1,27 @@
 """Small shared UI presentation helpers."""
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QLabel, QPushButton, QProgressBar, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QPushButton, QProgressBar, QTextEdit, QVBoxLayout, QWidget
+
+
+PANEL_MARGINS = (10, 10, 10, 10)
+PANEL_SPACING = 8
+LOG_HEIGHT = 132
+
+
+def apply_panel_density(layout: QVBoxLayout, *, margins: tuple[int, int, int, int] = PANEL_MARGINS, spacing: int = PANEL_SPACING):
+    """Apply consistent margins and spacing to a top-level panel layout."""
+
+    layout.setContentsMargins(*margins)
+    layout.setSpacing(spacing)
+    return layout
+
+
+def set_log_height(widget: QTextEdit, height: int = LOG_HEIGHT):
+    """Keep log panes compact and predictable across panels."""
+
+    widget.setMinimumHeight(height)
+    widget.setMaximumHeight(height)
+    return widget
 
 
 def mark_primary(button: QPushButton) -> QPushButton:

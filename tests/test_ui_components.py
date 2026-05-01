@@ -67,7 +67,10 @@ def test_set_busy_state_updates_button_progress_and_optional_label():
 def test_fill_panel_uses_shared_empty_state_and_busy_helper():
     source = Path("ui/fill_panel.py").read_text(encoding="utf-8")
 
-    assert "from ui.components import EmptyState, mark_secondary, set_busy_state" in source
+    assert "from ui.components import" in source
+    assert "EmptyState" in source
+    assert "mark_secondary" in source
+    assert "set_busy_state" in source
     assert "self.empty_state = EmptyState(" in source
     assert "self.lbl_empty_hint" not in source
     assert "set_busy_state(self.btn_fill, self.progress, True" in source

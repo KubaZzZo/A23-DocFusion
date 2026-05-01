@@ -149,7 +149,7 @@ QTableWidget {{
     alternate-background-color: {TABLE_ROW_ALT};
 }}
 QTableWidget::item {{
-    padding: 6px 8px;
+    padding: 5px 8px;
 }}
 QTableWidget::item:selected {{
     background-color: #E8F0FE;
@@ -159,7 +159,8 @@ QHeaderView::section {{
     background-color: {TABLE_HEADER_BG};
     color: {TEXT_PRIMARY};
     font-weight: bold;
-    padding: 8px 6px;
+    padding: 6px 8px;
+    min-height: 26px;
     border: none;
     border-bottom: 1px solid {BORDER};
     border-right: 1px solid #E8E8E8;

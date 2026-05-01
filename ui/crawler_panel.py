@@ -14,7 +14,7 @@ from core.document_workflow import DocumentWorkflow
 from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
 from core.entity_extractor import EntityExtractor
 from config import CRAWLED_DIR
-from ui.components import mark_secondary
+from ui.components import apply_panel_density, mark_secondary, set_log_height
 from ui.task_runner import ProgressTaskWorker, TaskWorker
 from logger import get_logger
 
@@ -62,6 +62,7 @@ class CrawlerPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
+        apply_panel_density(layout)
 
         # 上方控制区
         ctrl_layout = QHBoxLayout()
@@ -118,7 +119,7 @@ class CrawlerPanel(QWidget):
         status_layout.addWidget(self.progress)
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
-        self.txt_log.setMaximumHeight(120)
+        set_log_height(self.txt_log)
         self.txt_log.setPlaceholderText("操作日志...")
         status_layout.addWidget(self.txt_log)
         ctrl_layout.addWidget(status_group, 1)

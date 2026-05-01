@@ -11,7 +11,7 @@ from core.doc_commander import DocCommander
 from core.document_workflow import DocumentWorkflow
 from core.document_parser import DocumentParser
 from db.database import DocumentDAO
-from ui.components import mark_secondary
+from ui.components import apply_panel_density, mark_secondary, set_log_height
 from ui.task_runner import TaskWorker
 from logger import get_logger
 
@@ -28,7 +28,7 @@ class DocPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        apply_panel_density(layout)
 
         # 上方：文件选择 + 元信息
         file_bar = QHBoxLayout()
@@ -60,6 +60,7 @@ class DocPanel(QWidget):
         log_layout = QVBoxLayout(log_group)
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
+        set_log_height(self.txt_log)
         self.txt_log.setPlaceholderText("执行指令后，操作日志将显示在这里...")
         log_layout.addWidget(self.txt_log)
         splitter.addWidget(log_group)

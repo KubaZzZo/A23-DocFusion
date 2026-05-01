@@ -11,7 +11,7 @@ from core.template_filler import TemplateFiller
 from core.template_workflow import TemplateWorkflow
 from core.semantic_matcher import SemanticMatcher
 from db.database import EntityDAO
-from ui.components import EmptyState, mark_secondary, set_busy_state
+from ui.components import EmptyState, apply_panel_density, mark_secondary, set_busy_state
 from ui.fill_confirm_dialog import FillConfirmDialog
 from ui.task_runner import TaskWorker
 import os
@@ -26,6 +26,7 @@ class FillPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
+        apply_panel_density(layout)
 
         # 模板选择
         tpl_bar = QHBoxLayout()
