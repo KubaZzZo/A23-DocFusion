@@ -320,28 +320,70 @@ class CrawlerPanel(QWidget):
         try:
             extractor = EntityExtractor()
             document_workflow = DocumentWorkflow(upload_dir=CRAWLED_DIR)
-            for i, article in enumerate(articles):
-                if should_cancel and should_cancel():
-                    return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": True}
-                content = article.get("content", "")
-                if content:
+
+            async def _extract_one(job: dict):
+                try:
+                    result = await extractor.extract(job["content"])
+                    entities = result.get("entities", [])
+                    if entities:
+                        EntityDAO.create_batch(job["doc_id"], entities)
+                        return len(entities)
+                except Exception as e:
+                    log.warning("????????????? %s - %s", job["title"], e)
+                return 0
+
+            async def _run_jobs():
+                nonlocal entity_count, processed
+                sem = asyncio.Semaphore(3)
+                pending = set()
+
+                async def _bounded(job: dict):
+                    async with sem:
+                        return await _extract_one(job)
+
+                for article in articles:
+                    if should_cancel and should_cancel():
+                        break
+                    content = article.get("content", "")
+                    if not content:
+                        processed += 1
+                        progress({"current": processed, "total": total})
+                        continue
                     title = article.get("title", "article")
                     digest = uuid4().hex[:8]
                     filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
                     uploaded = document_workflow.upload_document(filename, content.encode("utf-8"))
                     DocumentDAO.update_text(uploaded["id"], content)
                     doc = DocumentDAO.get_by_id(uploaded["id"])
-                    try:
-                        result = loop.run_until_complete(extractor.extract(content))
-                        entities = result.get("entities", [])
-                        if entities:
-                            EntityDAO.create_batch(doc.id, entities)
-                            entity_count += len(entities)
-                    except Exception as e:
-                        log.warning("????????????? %s - %s", article.get("title", ""), e)
-                processed = i + 1
-                progress({"current": i + 1, "total": total})
-            return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": False}
+                    pending.add(asyncio.create_task(_bounded({"title": title, "content": content, "doc_id": doc.id})))
+
+                    while len(pending) >= 3:
+                        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                        for task in done:
+                            entity_count += task.result()
+                            processed += 1
+                            progress({"current": processed, "total": total})
+                            if should_cancel and should_cancel():
+                                for left in pending:
+                                    left.cancel()
+                                await asyncio.gather(*pending, return_exceptions=True)
+                                return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": True}
+
+                while pending:
+                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        entity_count += task.result()
+                        processed += 1
+                        progress({"current": processed, "total": total})
+                        if should_cancel and should_cancel():
+                            for left in pending:
+                                left.cancel()
+                            await asyncio.gather(*pending, return_exceptions=True)
+                            return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": True}
+
+                return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": False}
+
+            return loop.run_until_complete(_run_jobs())
         finally:
             loop.close()
 
