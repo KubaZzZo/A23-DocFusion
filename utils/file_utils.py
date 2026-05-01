@@ -16,3 +16,36 @@ def safe_copy(src: str, dest_dir: Path) -> Path:
     shutil.copyfile(src, dest)
     dest.chmod(0o666)
     return dest
+
+
+class FileTransaction:
+    """Track newly created files and remove them unless the caller commits."""
+
+    def __init__(self):
+        self._paths: list[Path] = []
+        self._committed = False
+
+    def track(self, path: str | Path) -> Path:
+        tracked = Path(path)
+        self._paths.append(tracked)
+        return tracked
+
+    def write_bytes(self, path: str | Path, content: bytes) -> Path:
+        tracked = self.track(path)
+        tracked.write_bytes(content)
+        return tracked
+
+    def commit(self):
+        self._committed = True
+
+    def rollback(self):
+        for path in reversed(self._paths):
+            path.unlink(missing_ok=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None or not self._committed:
+            self.rollback()
+        return False

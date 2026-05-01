@@ -61,6 +61,24 @@ class FakeEntityDAO:
         cls.batches.append((doc_id, list(entities)))
 
 
+class FakeDocumentWorkflow:
+    def __init__(self, upload_dir: Path):
+        self.upload_dir = Path(upload_dir)
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+
+    def upload_document(self, filename: str, content: bytes):
+        file_path = self.upload_dir / filename
+        file_path.write_bytes(content)
+        doc = FakeDocumentDAO.create(filename, "txt", str(file_path))
+        return {"id": doc.id, "filename": doc.filename, "file_type": doc.file_type, "path": doc.file_path}
+
+    def parse_document(self, doc_id: int):
+        doc = next(d for d in FakeDocumentDAO.docs if d.id == doc_id)
+        raw_text = Path(doc.file_path).read_text(encoding="utf-8")
+        FakeDocumentDAO.update_text(doc_id, raw_text)
+        return {"doc_id": doc_id, "text_length": len(raw_text)}
+
+
 def setup_function():
     FakeDocumentDAO.docs = []
     FakeArticleDAO.articles = []
@@ -79,6 +97,7 @@ def test_import_worker_stores_crawled_article_as_real_file(monkeypatch):
     monkeypatch.setattr(crawler_panel, "DocumentDAO", FakeDocumentDAO)
     monkeypatch.setattr(crawler_panel, "CrawledArticleDAO", FakeArticleDAO)
     monkeypatch.setattr(crawler_panel, "EntityDAO", FakeEntityDAO)
+    monkeypatch.setattr(crawler_panel, "DocumentWorkflow", FakeDocumentWorkflow)
     monkeypatch.setattr(crawler_panel, "CRAWLED_DIR", make_test_crawled_dir())
     article = {
         "title": "测试新闻标题",
@@ -106,6 +125,7 @@ def test_import_worker_reuses_single_extractor_for_multiple_articles(monkeypatch
     monkeypatch.setattr(crawler_panel, "DocumentDAO", FakeDocumentDAO)
     monkeypatch.setattr(crawler_panel, "CrawledArticleDAO", FakeArticleDAO)
     monkeypatch.setattr(crawler_panel, "EntityDAO", FakeEntityDAO)
+    monkeypatch.setattr(crawler_panel, "DocumentWorkflow", FakeDocumentWorkflow)
     monkeypatch.setattr(crawler_panel, "CRAWLED_DIR", make_test_crawled_dir())
     articles = [
         {

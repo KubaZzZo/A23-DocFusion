@@ -3,9 +3,11 @@ import json
 import shutil
 from pathlib import Path
 from datetime import datetime
+from typing import Literal
 from docx import Document as DocxDocument
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from llm import get_llm
 from llm.base import strip_json_code_fence
 from config import DATA_DIR
@@ -35,6 +37,71 @@ COMMAND_PARSE_PROMPT = """你是一个文档操作指令解析器。用户会用
 用户："查找所有'公司'替换为'企业'" → {"action":"find_replace","target":"all","params":{"find":"公司","replace":"企业"},"description":"全文替换"}
 用户："提取所有表格" → {"action":"extract","target":"tables","params":{},"description":"提取所有表格内容"}
 """
+
+
+class _StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FormatParams(_StrictModel):
+    target: Literal["paragraph", "table_row"] | None = None
+    index: int = Field(default=0, ge=0)
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    font_size: float | None = Field(default=None, gt=0)
+    font_name: str | None = None
+    color: tuple[int, int, int] | None = None
+    alignment: Literal["left", "center", "right", "justify"] | None = None
+
+    @model_validator(mode="after")
+    def _validate_color(self):
+        if self.color is not None and any(value < 0 or value > 255 for value in self.color):
+            raise ValueError("color must be three integers between 0 and 255")
+        return self
+
+
+class EditParams(_StrictModel):
+    operation: Literal["replace", "insert", "delete"] = "replace"
+    index: int | None = Field(default=None, ge=0)
+    text: str = ""
+
+    @model_validator(mode="after")
+    def _validate_required_fields(self):
+        if self.operation in {"replace", "delete"} and self.index is None:
+            raise ValueError("index must be a non-negative integer")
+        return self
+
+
+class FindReplaceParams(_StrictModel):
+    find: str = Field(min_length=1)
+    replace: str = ""
+
+
+class ExtractParams(_StrictModel):
+    target: Literal["text", "tables", "headings"] | None = None
+
+
+class StructureParams(_StrictModel):
+    operation: Literal["add_heading", "add_paragraph"] = "add_paragraph"
+    text: str = ""
+    level: int = Field(default=1, ge=1, le=9)
+
+
+class CommandSchema(_StrictModel):
+    action: Literal["format", "edit", "find_replace", "extract", "structure"]
+    target: str | None = None
+    params: dict = Field(default_factory=dict)
+    description: str = ""
+
+
+PARAM_SCHEMAS = {
+    "format": FormatParams,
+    "edit": EditParams,
+    "find_replace": FindReplaceParams,
+    "extract": ExtractParams,
+    "structure": StructureParams,
+}
 
 
 class DocCommander:
@@ -128,23 +195,26 @@ class DocCommander:
         if not isinstance(command, dict):
             return "command must be an object"
 
-        action = command.get("action")
-        params = command.get("params", {})
-        if not isinstance(params, dict):
-            return "params must be an object"
-
-        target = command.get("target", params.get("target"))
-        if action == "format":
-            return cls._validate_format_command(target, params)
-        if action == "edit":
-            return cls._validate_edit_command(params)
-        if action == "find_replace":
-            return cls._validate_find_replace_command(params)
-        if action == "extract":
-            return cls._validate_extract_command(target)
-        if action == "structure":
-            return cls._validate_structure_command(params)
+        try:
+            parsed = CommandSchema.model_validate(command)
+            params = dict(parsed.params)
+            if parsed.target is not None and "target" not in params:
+                params["target"] = parsed.target
+            PARAM_SCHEMAS[parsed.action].model_validate(params)
+        except ValidationError as e:
+            return cls._format_validation_error(e)
+        except ValueError as e:
+            return str(e)
         return ""
+
+    @staticmethod
+    def _format_validation_error(error: ValidationError) -> str:
+        first = error.errors()[0]
+        loc = ".".join(str(part) for part in first.get("loc", ()))
+        message = first.get("msg", "invalid command")
+        if first.get("type") == "extra_forbidden" and loc:
+            return f"{loc} is not allowed"
+        return f"{loc}: {message}" if loc else message
 
     @staticmethod
     def _validate_format_command(target, params: dict) -> str:

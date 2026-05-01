@@ -1,10 +1,12 @@
 """Settings dialog cloud vendor preset tests."""
 from ui.settings_dialog import (
     CLOUD_VENDOR_PRESETS,
+    _format_provider_health_message,
     _extract_model_names,
     _normalize_models_url,
     get_cloud_vendor_preset,
 )
+from llm.provider_health import ProviderHealthResult
 
 
 def test_known_vendor_presets_exist():
@@ -38,3 +40,15 @@ def test_extract_model_names_accepts_nonstandard_payloads():
         "deepseek-chat",
     ]
     assert _extract_model_names("ok") == []
+
+
+def test_format_provider_health_message_with_models():
+    result = ProviderHealthResult(True, "连接正常", "https://api.example.com/v1/models", ["m1", "m2"])
+
+    assert _format_provider_health_message("测试供应商", result) == "测试供应商 连接正常\n可用模型: m1, m2"
+
+
+def test_format_provider_health_message_without_models():
+    result = ProviderHealthResult(True, "兼容接口已响应，但未返回 JSON", "https://api.example.com/v1/models", [])
+
+    assert _format_provider_health_message("测试供应商", result) == "测试供应商 连接正常\n兼容接口已响应，但未返回 JSON"

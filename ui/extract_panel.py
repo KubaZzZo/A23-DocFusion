@@ -9,11 +9,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
-from core.document_parser import DocumentParser
+from core.document_workflow import DocumentWorkflow
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
-from config import UPLOAD_DIR
-from utils.file_utils import safe_copy
+from ui.task_runner import TaskWorker
 
 # 实体类型颜色映射
 ENTITY_COLORS = {
@@ -27,27 +26,6 @@ ENTITY_COLORS = {
     "id_number":    ("#FA8C16", "#FFF4E6", "编号"),
     "custom":       ("#8C8C8C", "#F5F5F5", "其他"),
 }
-
-
-class ExtractWorker(QThread):
-    """实体提取线程"""
-    finished = pyqtSignal(dict)
-    error = pyqtSignal(str)
-
-    def __init__(self, text: str):
-        super().__init__()
-        self.text = text
-
-    def run(self):
-        loop = asyncio.new_event_loop()
-        try:
-            extractor = EntityExtractor()
-            result = loop.run_until_complete(extractor.extract(self.text))
-            self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 class BatchExtractWorker(QThread):
@@ -68,17 +46,18 @@ class BatchExtractWorker(QThread):
             docs_count = 0
             failures = []
             total = len(self.paths)
+            document_workflow = DocumentWorkflow()
 
             for i, path in enumerate(self.paths, start=1):
                 src_path = Path(path)
                 self.progress.emit(i, total, src_path.name)
                 try:
-                    dest = safe_copy(path, UPLOAD_DIR)
-                    parsed = DocumentParser.parse(str(dest))
-                    doc = DocumentDAO.create(src_path.name, src_path.suffix.lstrip("."), str(dest))
-                    DocumentDAO.update_text(doc.id, parsed["text"])
+                    uploaded = document_workflow.upload_document(src_path.name, src_path.read_bytes())
+                    document_workflow.parse_document(uploaded["id"])
+                    doc = DocumentDAO.get_by_id(uploaded["id"])
+                    text = doc.raw_text or ""
 
-                    result = loop.run_until_complete(extractor.extract(parsed["text"]))
+                    result = loop.run_until_complete(extractor.extract(text))
                     entities = result.get("entities", [])
                     if entities:
                         EntityDAO.create_batch(doc.id, entities)
@@ -118,6 +97,7 @@ class ExtractPanel(QWidget):
         super().__init__()
         self.current_doc = None
         self.current_entities = []
+        self.document_workflow = DocumentWorkflow()
         self._init_ui()
 
     def _init_ui(self):
@@ -242,24 +222,21 @@ class ExtractPanel(QWidget):
         if not path:
             return
 
-        dest = safe_copy(path, UPLOAD_DIR)
-
         try:
-            result = DocumentParser.parse(str(dest))
+            uploaded = self.document_workflow.upload_document(Path(path).name, Path(path).read_bytes())
+            result = self.document_workflow.parse_document(uploaded["id"], include_text=True)
         except Exception as e:
             QMessageBox.critical(self, "解析失败", str(e))
             return
 
-        suffix = Path(path).suffix.lstrip(".")
-        doc = DocumentDAO.create(Path(path).name, suffix, str(dest))
-        DocumentDAO.update_text(doc.id, result["text"])
+        doc = DocumentDAO.get_by_id(uploaded["id"])
+        text = result["text"]
 
         self.current_doc = doc
         self.lbl_file.setText(f"{doc.filename}")
-        text = result["text"]
         char_count = len(text)
         line_count = text.count("\n") + 1
-        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {suffix.upper()}  |  {char_count} 字  |  {line_count} 行")
+        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {doc.file_type.upper()}  |  {char_count} 字  |  {line_count} 行")
         self.txt_content.setPlainText(text)
         self.btn_extract.setEnabled(True)
         self.btn_reextract.setEnabled(True)
@@ -333,10 +310,22 @@ class ExtractPanel(QWidget):
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
 
-        self.worker = ExtractWorker(text)
-        self.worker.finished.connect(self._on_extract_done)
-        self.worker.error.connect(self._on_extract_error)
+        self.worker = TaskWorker(
+            lambda: self._run_extract_task(text),
+            error_prefix="entity extraction",
+        )
+        self.worker.succeeded.connect(self._on_extract_done)
+        self.worker.failed.connect(self._on_extract_error)
         self.worker.start()
+
+    @staticmethod
+    def _run_extract_task(text: str) -> dict:
+        loop = asyncio.new_event_loop()
+        try:
+            extractor = EntityExtractor()
+            return loop.run_until_complete(extractor.extract(text))
+        finally:
+            loop.close()
 
     def _clear_and_reextract(self):
         if not self.current_doc:

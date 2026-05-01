@@ -8,10 +8,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from core.doc_commander import DocCommander
+from core.document_workflow import DocumentWorkflow
 from core.document_parser import DocumentParser
 from db.database import DocumentDAO
-from config import UPLOAD_DIR
-from utils.file_utils import safe_copy
 from ui.task_runner import TaskWorker
 from logger import get_logger
 
@@ -23,6 +22,7 @@ class DocPanel(QWidget):
         super().__init__()
         self.current_doc = None
         self.commander = DocCommander()
+        self.document_workflow = DocumentWorkflow()
         self._init_ui()
 
     def _init_ui(self):
@@ -87,26 +87,21 @@ class DocPanel(QWidget):
         if not path:
             return
 
-        # 复制到上传目录
-        dest = safe_copy(path, UPLOAD_DIR)
-
-        # 解析
         try:
-            result = DocumentParser.parse(str(dest))
+            uploaded = self.document_workflow.upload_document(Path(path).name, Path(path).read_bytes())
+            result = self.document_workflow.parse_document(uploaded["id"], include_text=True)
         except Exception as e:
             QMessageBox.critical(self, "解析失败", str(e))
             self._log(f"解析失败: {Path(path).name} - {e}")
             return
-        suffix = Path(path).suffix.lstrip(".")
-        doc = DocumentDAO.create(Path(path).name, suffix, str(dest))
-        DocumentDAO.update_text(doc.id, result["text"])
+        doc = DocumentDAO.get_by_id(uploaded["id"])
+        text = result["text"]
 
         self.current_doc = doc
         self.lbl_file.setText(f"{doc.filename}")
-        text = result["text"]
         char_count = len(text)
         line_count = text.count("\n") + 1
-        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {suffix.upper()}  |  {char_count} 字  |  {line_count} 行")
+        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {doc.file_type.upper()}  |  {char_count} 字  |  {line_count} 行")
         self.txt_preview.setPlainText(text)
         self._log(f"已加载文档: {doc.filename}")
 

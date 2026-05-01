@@ -1,18 +1,23 @@
 """FastAPI路由定义"""
-import csv
 import io
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from core.article_workflow import ArticleWorkflow
 from core.document_workflow import DocumentWorkflow
+from core.entity_workflow import EntityWorkflow
+from core.statistics_workflow import StatisticsWorkflow
 from core.template_workflow import TemplateWorkflow
 from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
-from db.database import DocumentDAO, EntityDAO, TemplateDAO, FillTaskDAO, CrawledArticleDAO
+from db.database import FillTaskDAO
 
 
 router = APIRouter(prefix="/api")
 document_workflow = DocumentWorkflow()
+entity_workflow = EntityWorkflow()
 template_workflow = TemplateWorkflow()
+article_workflow = ArticleWorkflow()
+statistics_workflow = StatisticsWorkflow()
 
 
 class CommandRequest(BaseModel):
@@ -91,70 +96,21 @@ async def execute_command(req: CommandRequest):
 @router.get("/entities", tags=["实体提取"], summary="查询实体")
 async def list_entities(doc_id: int = None, keyword: str = None):
     """查询已提取的实体，支持按文档ID或关键词过滤"""
-    if keyword:
-        entities = EntityDAO.search(keyword)
-    elif doc_id:
-        entities = EntityDAO.get_by_document(doc_id)
-    else:
-        entities = EntityDAO.get_all()
-    return [{"id": e.id, "type": e.entity_type, "value": e.entity_value,
-             "context": e.context, "confidence": e.confidence} for e in entities]
+    return entity_workflow.list_entities(doc_id=doc_id, keyword=keyword)
 
 
 @router.get("/entities/export", tags=["实体提取"], summary="导出实体数据")
 async def export_entities(fmt: str = "csv", doc_id: int = None, keyword: str = None):
     """导出已提取实体，支持 CSV 和 Excel(xlsx)。"""
-    if keyword:
-        entities = EntityDAO.search(keyword)
-    elif doc_id:
-        entities = EntityDAO.get_by_document(doc_id)
-    else:
-        entities = EntityDAO.get_all()
-
-    rows = [
-        {
-            "id": e.id,
-            "type": e.entity_type,
-            "value": e.entity_value,
-            "context": e.context or "",
-            "confidence": e.confidence if e.confidence is not None else "",
-        }
-        for e in entities
-    ]
-
-    export_format = fmt.lower()
-    if export_format == "csv":
-        buffer = io.StringIO()
-        writer = csv.DictWriter(buffer, fieldnames=["id", "type", "value", "context", "confidence"])
-        writer.writeheader()
-        writer.writerows(rows)
-        content = buffer.getvalue().encode("utf-8-sig")
+    try:
+        export = entity_workflow.export_entities(fmt=fmt, doc_id=doc_id, keyword=keyword)
         return StreamingResponse(
-            io.BytesIO(content),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": "attachment; filename=entities.csv"},
+            io.BytesIO(export.content),
+            media_type=export.media_type,
+            headers={"Content-Disposition": f"attachment; filename={export.filename}"},
         )
-
-    if export_format in {"xlsx", "excel"}:
-        from openpyxl import Workbook
-
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.title = "Entities"
-        headers = ["id", "type", "value", "context", "confidence"]
-        sheet.append(headers)
-        for row in rows:
-            sheet.append([row[h] for h in headers])
-        buffer = io.BytesIO()
-        workbook.save(buffer)
-        buffer.seek(0)
-        return StreamingResponse(
-            buffer,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment; filename=entities.xlsx"},
-        )
-
-    raise HTTPException(400, "不支持的导出格式，请使用 csv 或 xlsx")
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 # --- 模板填写 ---
@@ -205,21 +161,16 @@ async def health():
 @router.get("/articles", tags=["新闻爬虫"], summary="获取爬取文章列表")
 async def list_articles():
     """获取所有已爬取的文章"""
-    articles = CrawledArticleDAO.get_all()
-    return [{"id": a.id, "title": a.title, "source": a.source, "author": a.author,
-             "publish_date": a.publish_date, "category": a.category,
-             "crawled_at": a.crawled_at.isoformat() if a.crawled_at else None} for a in articles]
+    return article_workflow.list_articles()
 
 
 @router.get("/articles/{article_id}", tags=["新闻爬虫"], summary="获取文章详情")
 async def get_article(article_id: int):
     """获取单篇爬取文章的完整内容"""
-    article = CrawledArticleDAO.get_by_id(article_id)
-    if not article:
-        raise HTTPException(404, "文章不存在")
-    return {"id": article.id, "title": article.title, "source": article.source,
-            "author": article.author, "publish_date": article.publish_date,
-            "content": article.content, "url": article.url, "category": article.category}
+    try:
+        return article_workflow.get_article(article_id)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 # --- 统计 ---
@@ -227,17 +178,4 @@ async def get_article(article_id: int):
 @router.get("/statistics", tags=["系统"], summary="系统统计数据")
 async def get_statistics():
     """获取系统各项统计数据"""
-    doc_count = DocumentDAO.count()
-    entity_count = EntityDAO.count()
-    tpl_count = TemplateDAO.count()
-    article_count = CrawledArticleDAO.count()
-
-    type_counts = EntityDAO.count_by_type()
-
-    return {
-        "documents": doc_count,
-        "entities": entity_count,
-        "templates": tpl_count,
-        "articles": article_count,
-        "entity_types": type_counts,
-    }
+    return statistics_workflow.get_statistics()

@@ -1,7 +1,7 @@
 """文件工具函数测试"""
 import pytest
 from pathlib import Path
-from utils.file_utils import safe_copy
+from utils.file_utils import FileTransaction, safe_copy
 
 TEST_DIR = Path(__file__).parent / "test_data"
 TEST_DIR.mkdir(exist_ok=True)
@@ -43,3 +43,23 @@ class TestSafeCopy:
         r1.unlink()
         r2.unlink()
         dest_dir.rmdir()
+
+
+class TestFileTransaction:
+    def test_rolls_back_uncommitted_files(self):
+        path = TEST_DIR / "transaction_rollback.txt"
+
+        with FileTransaction() as tx:
+            tx.write_bytes(path, b"created")
+
+        assert not path.exists()
+
+    def test_keeps_committed_files(self):
+        path = TEST_DIR / "transaction_commit.txt"
+
+        with FileTransaction() as tx:
+            tx.write_bytes(path, b"created")
+            tx.commit()
+
+        assert path.read_bytes() == b"created"
+        path.unlink(missing_ok=True)

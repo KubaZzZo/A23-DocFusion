@@ -6,11 +6,12 @@ from PyQt6.QtWidgets import (
     QFrame, QSplitter, QProgressBar, QScrollArea, QSizePolicy, QLineEdit,
     QFileDialog, QMessageBox, QTextEdit
 )
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QColor, QFont
 from datetime import datetime
 from db.database import DocumentDAO, EntityDAO, TemplateDAO, CrawledArticleDAO
 from llm import get_llm
+from ui.task_runner import TaskWorker
 from logger import get_logger
 
 log = get_logger("ui.dashboard_panel")
@@ -47,38 +48,6 @@ ENTITY_QA_PROMPT = """你是DocFusion的实体问答助手。请只根据给定�
 2. 如果无法确定答案，请回答“根据当前实体库无法确定”，不要编造。
 3. 回答要简洁，适合桌面端展示。
 """
-
-
-class EntityQAWorker(QThread):
-    """基于实体库的智能问答线程"""
-    finished = pyqtSignal(str)
-    error = pyqtSignal(str)
-
-    def __init__(self, question: str, entities: list[dict]):
-        super().__init__()
-        self.question = question
-        self.entities = entities
-
-    def run(self):
-        loop = asyncio.new_event_loop()
-        try:
-            context_lines = []
-            for i, entity in enumerate(self.entities[:300], start=1):
-                context_lines.append(
-                    f"{i}. 类型={entity['type']}；值={entity['value']}；上下文={entity['context']}；"
-                    f"置信度={entity['confidence']}"
-                )
-            context = "\n".join(context_lines)
-            messages = [
-                {"role": "system", "content": ENTITY_QA_PROMPT},
-                {"role": "user", "content": f"用户问题：{self.question}\n\n已提取实体：\n{context}"},
-            ]
-            answer = loop.run_until_complete(get_llm().chat(messages, temperature=0.0))
-            self.finished.emit(answer)
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 class StatCard(QWidget):
@@ -611,13 +580,35 @@ class DashboardPanel(QWidget):
             self.btn_entity_qa.setEnabled(False)
             self.btn_entity_qa.setText("思考中...")
             self.txt_entity_answer.setPlainText("正在基于实体库生成答案...")
-            self.qa_worker = EntityQAWorker(question, entities)
-            self.qa_worker.finished.connect(self._on_entity_answer)
-            self.qa_worker.error.connect(self._on_entity_qa_error)
+            self.qa_worker = TaskWorker(
+                lambda: self._run_entity_qa_task(question, entities),
+                error_prefix="entity qa",
+            )
+            self.qa_worker.succeeded.connect(self._on_entity_answer)
+            self.qa_worker.failed.connect(self._on_entity_qa_error)
             self.qa_worker.start()
         except Exception as e:
             log.warning("实体问答启动失败: %s", e)
             QMessageBox.critical(self, "问答失败", str(e))
+
+    @staticmethod
+    def _run_entity_qa_task(question: str, entities: list[dict]) -> str:
+        loop = asyncio.new_event_loop()
+        try:
+            context_lines = []
+            for i, entity in enumerate(entities[:300], start=1):
+                context_lines.append(
+                    f"{i}. 类型={entity['type']}；值={entity['value']}；上下文={entity['context']}；"
+                    f"置信度={entity['confidence']}"
+                )
+            context = "\n".join(context_lines)
+            messages = [
+                {"role": "system", "content": ENTITY_QA_PROMPT},
+                {"role": "user", "content": f"用户问题：{question}\n\n已提取实体：\n{context}"},
+            ]
+            return loop.run_until_complete(get_llm().chat(messages, temperature=0.0))
+        finally:
+            loop.close()
 
     def _on_entity_answer(self, answer: str):
         self.btn_entity_qa.setEnabled(True)

@@ -8,6 +8,7 @@ from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
 from config import UPLOAD_DIR
 from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
+from utils.file_utils import FileTransaction
 
 
 class DocumentWorkflow:
@@ -42,19 +43,23 @@ class DocumentWorkflow:
         if suffix not in DocumentParser.SUPPORTED_TYPES:
             raise WorkflowValidationError(f"不支持的格式: {suffix}")
 
-        save_path = self._next_upload_path(filename)
-        save_path.write_bytes(content)
-        doc = DocumentDAO.create(filename, suffix.lstrip("."), str(save_path))
-        return {"id": doc.id, "filename": doc.filename}
+        with FileTransaction() as tx:
+            save_path = tx.write_bytes(self._next_upload_path(filename), content)
+            doc = DocumentDAO.create(filename, suffix.lstrip("."), str(save_path))
+            tx.commit()
+        return {"id": doc.id, "filename": doc.filename, "file_type": doc.file_type, "path": doc.file_path}
 
-    def parse_document(self, doc_id: int) -> dict:
+    def parse_document(self, doc_id: int, include_text: bool = False) -> dict:
         doc = DocumentDAO.get_by_id(doc_id)
         if not doc:
             raise WorkflowNotFoundError("文档不存在")
 
         result = DocumentParser.parse(doc.file_path)
         DocumentDAO.update_text(doc_id, result["text"])
-        return {"doc_id": doc_id, "metadata": result["metadata"], "text_length": len(result["text"])}
+        response = {"doc_id": doc_id, "metadata": result["metadata"], "text_length": len(result["text"])}
+        if include_text:
+            response["text"] = result["text"]
+        return response
 
     async def extract_entities(self, doc_id: int) -> dict:
         doc = DocumentDAO.get_by_id(doc_id)

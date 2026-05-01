@@ -6,6 +6,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from config import LLM_CONFIG
 from config import BASE_DIR
+from llm.provider_health import ProviderHealthChecker, ProviderHealthResult
+from llm.provider_presets import (
+    CLOUD_VENDOR_PRESETS,
+    build_provider_profile,
+    extract_model_names,
+    get_cloud_vendor_preset,
+    normalize_models_url,
+    probe_openai_compatible,
+)
 from logger import get_logger
 from settings_store import (
     apply_saved_settings as _apply_saved_settings,
@@ -18,134 +27,15 @@ from settings_store import (
 SETTINGS_FILE = BASE_DIR / "data" / "settings.json"
 log = get_logger("ui.settings_dialog")
 
-
-CLOUD_VENDOR_PRESETS = {
-    "openai": {
-        "id": "openai",
-        "label": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "model_placeholder": "gpt-4o-mini",
-        "api_key_placeholder": "sk-...",
-    },
-    "deepseek": {
-        "id": "deepseek",
-        "label": "DeepSeek",
-        "base_url": "https://api.deepseek.com/v1",
-        "model_placeholder": "deepseek-chat",
-        "api_key_placeholder": "sk-...",
-    },
-    "moonshot": {
-        "id": "moonshot",
-        "label": "Moonshot",
-        "base_url": "https://api.moonshot.cn/v1",
-        "model_placeholder": "moonshot-v1-8k",
-        "api_key_placeholder": "sk-...",
-    },
-    "qwen": {
-        "id": "qwen",
-        "label": "通义千问",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model_placeholder": "qwen-plus",
-        "api_key_placeholder": "sk-...",
-    },
-    "zhipu": {
-        "id": "zhipu",
-        "label": "智谱",
-        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
-        "model_placeholder": "glm-4-plus",
-        "api_key_placeholder": "sk-...",
-    },
-    "claude_compatible": {
-        "id": "claude_compatible",
-        "label": "Claude（兼容接口）",
-        "base_url": "",
-        "model_placeholder": "claude-3-5-sonnet",
-        "api_key_placeholder": "兼容接口提供的 API Key",
-    },
-    "custom": {
-        "id": "custom",
-        "label": "自定义兼容接口",
-        "base_url": "",
-        "model_placeholder": "your-model-name",
-        "api_key_placeholder": "your-api-key",
-    },
-}
+_normalize_models_url = normalize_models_url
+_extract_model_names = extract_model_names
+_probe_openai_compatible = probe_openai_compatible
 
 
-def get_cloud_vendor_preset(vendor: str) -> dict:
-    return CLOUD_VENDOR_PRESETS.get(vendor, CLOUD_VENDOR_PRESETS["custom"])
-
-
-def _normalize_models_url(base_url: str) -> str:
-    url = (base_url or "https://api.openai.com/v1").strip().rstrip("/")
-    if not url:
-        url = "https://api.openai.com/v1"
-    if url.endswith("/models"):
-        return url
-    return f"{url}/models"
-
-
-def _extract_model_names(payload) -> list[str]:
-    if payload is None or isinstance(payload, str):
-        return []
-
-    items = []
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            items = data
-        elif isinstance(data, dict):
-            items = [data]
-        elif isinstance(payload.get("models"), list):
-            items = payload.get("models", [])
-        else:
-            return []
-    elif isinstance(payload, list):
-        items = payload
-    else:
-        data = getattr(payload, "data", None)
-        if isinstance(data, list):
-            items = data
-        elif data is not None:
-            items = [data]
-        else:
-            return []
-
-    names = []
-    for item in items:
-        if isinstance(item, str):
-            if item:
-                names.append(item)
-            continue
-        if isinstance(item, dict):
-            name = item.get("id") or item.get("name") or item.get("model")
-            if name:
-                names.append(str(name))
-            continue
-        name = getattr(item, "id", None) or getattr(item, "name", None) or getattr(item, "model", None)
-        if name:
-            names.append(str(name))
-    return names
-
-
-def _probe_openai_compatible(api_key: str, base_url: str) -> tuple[list[str], str]:
-    import httpx
-
-    url = _normalize_models_url(base_url)
-    headers = {"Authorization": f"Bearer {api_key}"}
-    response = httpx.get(url, headers=headers, timeout=10)
-    response.raise_for_status()
-
-    try:
-        payload = response.json()
-    except ValueError:
-        return [], "???????????? JSON ????"
-
-    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
-        error = payload["error"].get("message") or str(payload["error"])
-        raise RuntimeError(error)
-
-    return _extract_model_names(payload), ""
+def _format_provider_health_message(vendor_label: str, result: ProviderHealthResult) -> str:
+    if result.models:
+        return f"{vendor_label} 连接正常\n可用模型: {', '.join(result.models[:10])}"
+    return f"{vendor_label} 连接正常\n{result.message}"
 
 
 def _encode_key(key: str) -> str:
@@ -283,22 +173,22 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "配置不完整", "请先填写 API Key")
             return
 
-        try:
-            names, note = _probe_openai_compatible(api_key, base_url)
-            if names:
-                QMessageBox.information(
-                    self,
-                    "连接成功",
-                    f"{vendor_label} 连接正常\n可用模型: {', '.join(names[:10])}",
-                )
-            else:
-                extra = note or "兼容接口已响应，但未返回标准模型列表"
-                QMessageBox.information(self, "连接成功", f"{vendor_label} 连接正常\n{extra}")
-        except Exception as e:
+        profile = build_provider_profile(
+            {
+                "vendor": self.openai_vendor.currentData() or "openai",
+                "api_key": api_key,
+                "base_url": base_url,
+                "model": self.openai_model.text().strip(),
+            }
+        )
+        result = ProviderHealthChecker().check_openai_compatible(profile)
+        if result.ok:
+            QMessageBox.information(self, "连接成功", _format_provider_health_message(vendor_label, result))
+        else:
             QMessageBox.critical(
                 self,
                 "连接失败",
-                f"无法连接到 {vendor_label}\n地址: {_normalize_models_url(base_url)}\n错误: {e}",
+                f"无法连接到 {vendor_label}\n地址: {result.url}\n错误: {result.message}",
             )
 
     def _save(self):

@@ -1,13 +1,15 @@
 """Template workflow orchestration shared by API and UI callers."""
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from datetime import datetime
 
 from core.template_filler import TemplateFiller
 from core.workflow_errors import WorkflowNotFoundError
 from db.database import EntityDAO, TemplateDAO, FillTaskDAO
-from config import UPLOAD_DIR
+from config import OUTPUT_DIR, UPLOAD_DIR
+from utils.file_utils import FileTransaction
 from logger import get_logger
 
 log = get_logger("core.template_workflow")
@@ -19,13 +21,13 @@ class TemplateWorkflow:
         self.upload_dir.mkdir(exist_ok=True)
 
     async def upload_template(self, filename: str, content: bytes) -> dict:
-        save_path = self._next_upload_path(filename)
-        save_path.write_bytes(content)
-
-        filler = TemplateFiller()
-        analysis = await filler.analyze_template(str(save_path))
-        tpl = TemplateDAO.create(filename, str(save_path), json.dumps(analysis, ensure_ascii=False))
-        return {"id": tpl.id, "filename": tpl.filename, "fields": analysis["field_names"]}
+        with FileTransaction() as tx:
+            save_path = tx.write_bytes(self._next_upload_path(filename), content)
+            filler = TemplateFiller()
+            analysis = await filler.analyze_template(str(save_path))
+            tpl = TemplateDAO.create(filename, str(save_path), json.dumps(analysis, ensure_ascii=False))
+            tx.commit()
+        return {"id": tpl.id, "filename": tpl.filename, "path": tpl.file_path, "fields": analysis["field_names"]}
 
     def create_fill_task(self, template_id: int, document_ids: list[int] | None = None) -> dict:
         tpl = TemplateDAO.get_by_id(template_id)
@@ -72,6 +74,40 @@ class TemplateWorkflow:
     def run_fill_task(self, task_id: int, template_path: str, entities: list[dict]):
         """Synchronous wrapper for FastAPI BackgroundTasks."""
         asyncio.run(self.do_fill(task_id, template_path, entities))
+
+    def fill_confirmed_map(self, template_path: str, fill_map: dict) -> dict:
+        path = Path(template_path)
+        suffix = path.suffix.lower()
+        if suffix not in {".xlsx", ".docx"}:
+            raise ValueError(f"不支持的模板格式: {suffix}")
+
+        filler = TemplateFiller()
+        analysis = asyncio.run(filler.analyze_template(template_path))
+        fields = analysis.get("fields", [])
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_name = f"{path.stem}_filled_{timestamp}{suffix}"
+        output_path = OUTPUT_DIR / output_name
+        shutil.copyfile(template_path, output_path)
+        output_path.chmod(0o666)
+
+        if suffix == ".xlsx":
+            filler._fill_xlsx(str(output_path), fields, fill_map)
+        elif suffix == ".docx":
+            filler._fill_docx(str(output_path), fields, fill_map)
+
+        filled_count = sum(1 for field in fields if field["field_name"] in fill_map)
+        total_count = len(fields)
+        unmatched_names = [field["field_name"] for field in fields if field["field_name"] not in fill_map]
+
+        return {
+            "success": True,
+            "output_path": str(output_path),
+            "filled": filled_count,
+            "total": total_count,
+            "accuracy": filled_count / total_count if total_count else 0,
+            "unmatched": unmatched_names,
+        }
 
     def _next_upload_path(self, filename: str) -> Path:
         source = Path(filename)

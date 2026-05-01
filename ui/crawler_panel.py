@@ -10,10 +10,12 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from crawler.news_spider import NewsSpider, NEWS_SOURCES
 from crawler.doc_generator import DocGenerator
 from crawler.doc_generator import _safe_filename
-from db.database import CrawledArticleDAO, DocumentDAO, EntityDAO
+from core.document_workflow import DocumentWorkflow
+from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
 from core.document_parser import DocumentParser
 from core.entity_extractor import EntityExtractor
 from config import CRAWLED_DIR
+from ui.task_runner import TaskWorker
 from logger import get_logger
 import shutil
 from pathlib import Path
@@ -54,23 +56,6 @@ class CrawlWorker(QThread):
                 spider.close()
 
 
-class DocGenWorker(QThread):
-    """文档生成线程"""
-    finished = pyqtSignal(dict)
-    error = pyqtSignal(str)
-
-    def __init__(self, articles: list[dict]):
-        super().__init__()
-        self.articles = articles
-
-    def run(self):
-        try:
-            paths = DocGenerator.generate_all(self.articles)
-            self.finished.emit(paths)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 class ImportWorker(QThread):
     """导入数据库 + 实体提取线程"""
     progress = pyqtSignal(int, int)
@@ -89,6 +74,7 @@ class ImportWorker(QThread):
                 CrawledArticleDAO.create_batch(self.articles)
             loop = asyncio.new_event_loop()
             extractor = EntityExtractor()
+            document_workflow = DocumentWorkflow(upload_dir=CRAWLED_DIR)
             for i, a in enumerate(self.articles):
                 # 同时存入 Document 表并提取实体
                 content = a.get("content", "")
@@ -96,14 +82,9 @@ class ImportWorker(QThread):
                     title = a.get("title", "article")
                     digest = uuid4().hex[:8]
                     filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
-                    file_path = CRAWLED_DIR / filename
-                    file_path.write_text(content, encoding="utf-8")
-                    doc = DocumentDAO.create(
-                        filename=filename,
-                        file_type="txt",
-                        file_path=str(file_path)
-                    )
-                    DocumentDAO.update_text(doc.id, content)
+                    uploaded = document_workflow.upload_document(filename, content.encode("utf-8"))
+                    document_workflow.parse_document(uploaded["id"])
+                    doc = DocumentDAO.get_by_id(uploaded["id"])
                     try:
                         result = loop.run_until_complete(extractor.extract(content))
                         entities = result.get("entities", [])
@@ -312,9 +293,12 @@ class CrawlerPanel(QWidget):
         self.progress.setRange(0, 0)
         self._log("开始生成测试文档...")
 
-        self.gen_worker = DocGenWorker(self.crawled_articles)
-        self.gen_worker.finished.connect(self._on_gen_done)
-        self.gen_worker.error.connect(self._on_gen_error)
+        self.gen_worker = TaskWorker(
+            lambda: DocGenerator.generate_all(self.crawled_articles),
+            error_prefix="document generation",
+        )
+        self.gen_worker.succeeded.connect(self._on_gen_done)
+        self.gen_worker.failed.connect(self._on_gen_error)
         self.gen_worker.start()
 
     def _on_gen_done(self, paths: dict):

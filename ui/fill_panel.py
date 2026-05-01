@@ -8,22 +8,19 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from core.template_filler import TemplateFiller
+from core.template_workflow import TemplateWorkflow
 from core.semantic_matcher import SemanticMatcher
-from db.database import EntityDAO, TemplateDAO
+from db.database import EntityDAO
 from ui.fill_confirm_dialog import FillConfirmDialog
 from ui.task_runner import TaskWorker
-from config import UPLOAD_DIR, OUTPUT_DIR
-from utils.file_utils import safe_copy
-import json
 import os
-import shutil as sh
-from datetime import datetime
 
 
 class FillPanel(QWidget):
     def __init__(self):
         super().__init__()
         self.current_template_path = None
+        self.template_workflow = TemplateWorkflow()
         self._init_ui()
 
     def _init_ui(self):
@@ -132,16 +129,22 @@ class FillPanel(QWidget):
         if not path:
             return
 
-        dest = safe_copy(path, UPLOAD_DIR)
-        self.current_template_path = str(dest)
-        self.lbl_tpl.setText(Path(path).name)
-
-        # 分析模板字段
         try:
             loop = asyncio.new_event_loop()
             try:
+                template = loop.run_until_complete(
+                    self.template_workflow.upload_template(Path(path).name, Path(path).read_bytes())
+                )
+            finally:
+                loop.close()
+
+            self.current_template_path = template["path"]
+            self.lbl_tpl.setText(Path(path).name)
+
+            loop = asyncio.new_event_loop()
+            try:
                 filler = TemplateFiller()
-                analysis = loop.run_until_complete(filler.analyze_template(str(dest)))
+                analysis = loop.run_until_complete(filler.analyze_template(self.current_template_path))
             finally:
                 loop.close()
 
@@ -149,7 +152,6 @@ class FillPanel(QWidget):
             for f in analysis.get("field_names", []):
                 self.fields_list.addItem(f)
 
-            TemplateDAO.create(Path(path).name, str(dest), json.dumps(analysis, ensure_ascii=False))
             self.btn_fill.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, "模板分析失败", str(e))
@@ -233,28 +235,13 @@ class FillPanel(QWidget):
 
         # 执行填写
         try:
-            path = Path(self.current_template_path)
-            suffix = path.suffix.lower()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_name = f"{path.stem}_filled_{timestamp}{suffix}"
-            output_path = OUTPUT_DIR / output_name
-            sh.copyfile(self.current_template_path, output_path)
-            output_path.chmod(0o666)
+            result = self.template_workflow.fill_confirmed_map(self.current_template_path, fill_map)
+            filled_count = result["filled"]
+            total_count = result["total"]
 
-            filler = TemplateFiller()
-            fields = analysis.get("fields", [])
-
-            if suffix == ".xlsx":
-                filler._fill_xlsx(str(output_path), fields, fill_map)
-            elif suffix == ".docx":
-                filler._fill_docx(str(output_path), fields, fill_map)
-
-            filled_count = sum(1 for f in fields if f["field_name"] in fill_map)
-            total_count = len(fields)
-
-            self.result_path = str(output_path)
-            accuracy_str = f"{filled_count / total_count:.1%}" if total_count > 0 else "N/A"
-            unmatched_names = [f["field_name"] for f in fields if f["field_name"] not in fill_map]
+            self.result_path = result["output_path"]
+            accuracy_str = f"{result['accuracy']:.1%}" if total_count > 0 else "N/A"
+            unmatched_names = result.get("unmatched", [])
 
             self.result_frame.setVisible(True)
             self.lbl_empty_hint.setVisible(False)

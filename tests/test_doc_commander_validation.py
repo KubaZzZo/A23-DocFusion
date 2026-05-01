@@ -86,3 +86,69 @@ def test_execute_rejects_invalid_extract_target_without_backup():
         assert _backup_names() == before_backups
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_execute_rejects_missing_action_before_backup():
+    path = _make_docx()
+    before_backups = _backup_names()
+    commander = DocCommander.__new__(DocCommander)
+
+    try:
+        result = commander.execute(str(path), {"target": "paragraph", "params": {"index": 0, "bold": True}})
+
+        assert result["success"] is False
+        assert "action" in result["message"]
+        assert _backup_names() == before_backups
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_execute_rejects_unknown_action_before_backup():
+    path = _make_docx()
+    before_backups = _backup_names()
+    commander = DocCommander.__new__(DocCommander)
+
+    try:
+        result = commander.execute(str(path), {"action": "rewrite", "params": {}})
+
+        assert result["success"] is False
+        assert "action" in result["message"]
+        assert _backup_names() == before_backups
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_execute_rejects_unexpected_command_field_before_backup():
+    path = _make_docx()
+    before_backups = _backup_names()
+    commander = DocCommander.__new__(DocCommander)
+
+    try:
+        result = commander.execute(
+            str(path),
+            {"action": "format", "target": "paragraph", "params": {"index": 0}, "unsafe": True},
+        )
+
+        assert result["success"] is False
+        assert "unsafe" in result["message"]
+        assert _backup_names() == before_backups
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_execute_rejects_unexpected_format_param_before_backup():
+    path = _make_docx()
+    before_backups = _backup_names()
+    commander = DocCommander.__new__(DocCommander)
+
+    try:
+        result = commander.execute(
+            str(path),
+            {"action": "format", "target": "paragraph", "params": {"index": 0, "macro": "run"}},
+        )
+
+        assert result["success"] is False
+        assert "macro" in result["message"]
+        assert _backup_names() == before_backups
+    finally:
+        path.unlink(missing_ok=True)
