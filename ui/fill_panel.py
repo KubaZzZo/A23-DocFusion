@@ -1,20 +1,34 @@
 """表格自动填写面板"""
 import asyncio
+import os
 from pathlib import Path
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit,
-    QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QSplitter,
-    QProgressBar, QMessageBox, QListWidget, QHeaderView, QGroupBox, QFrame
-)
+
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QProgressBar,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QListWidget,
+    QHeaderView,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core.semantic_matcher import SemanticMatcher
 from core.template_filler import TemplateFiller
 from core.template_workflow import TemplateWorkflow
-from core.semantic_matcher import SemanticMatcher
 from db.database import EntityDAO
 from ui.components import EmptyState, apply_panel_density, mark_secondary, set_busy_state
 from ui.fill_confirm_dialog import FillConfirmDialog
 from ui.task_runner import TaskWorker
-import os
 
 
 class FillPanel(QWidget):
@@ -28,7 +42,6 @@ class FillPanel(QWidget):
         layout = QVBoxLayout(self)
         apply_panel_density(layout)
 
-        # 模板选择
         tpl_bar = QHBoxLayout()
         self.btn_open_tpl = QPushButton("选择模板表格")
         mark_secondary(self.btn_open_tpl)
@@ -38,10 +51,8 @@ class FillPanel(QWidget):
         tpl_bar.addWidget(self.lbl_tpl, 1)
         layout.addLayout(tpl_bar)
 
-        # 中间区域
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 左侧：识别的字段 + 数据库实体
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -71,7 +82,6 @@ class FillPanel(QWidget):
 
         splitter.addWidget(left)
 
-        # 右侧：填写结果
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -85,7 +95,6 @@ class FillPanel(QWidget):
         self.progress.setVisible(False)
         right_layout.addWidget(self.progress)
 
-        # 填写结果卡片
         self.result_frame = QFrame()
         self.result_frame.setStyleSheet("""
             QFrame {
@@ -112,8 +121,7 @@ class FillPanel(QWidget):
         result_card_layout.addWidget(self.lbl_result_path)
         right_layout.addWidget(self.result_frame)
 
-        # 空状态提示
-        self.empty_state = EmptyState("等待填写模板", "选择模板并点击「开始自动填写」后，结果将显示在这里")
+        self.empty_state = EmptyState("等待填写模板", "选择模板并点击“开始自动填写”后，结果将显示在这里。")
         right_layout.addWidget(self.empty_state, 1)
 
         self.btn_open_result = QPushButton("打开结果文件")
@@ -127,8 +135,7 @@ class FillPanel(QWidget):
         layout.addWidget(splitter, 1)
 
     def _open_template(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择模板表格", "",
-                                               "表格文件 (*.xlsx *.docx)")
+        path, _ = QFileDialog.getOpenFileName(self, "选择模板表格", "", "表格文件 (*.xlsx *.docx)")
         if not path:
             return
 
@@ -152,8 +159,8 @@ class FillPanel(QWidget):
                 loop.close()
 
             self.fields_list.clear()
-            for f in analysis.get("field_names", []):
-                self.fields_list.addItem(f)
+            for field_name in analysis.get("field_names", []):
+                self.fields_list.addItem(field_name)
 
             self.btn_fill.setEnabled(True)
         except Exception as e:
@@ -174,11 +181,13 @@ class FillPanel(QWidget):
 
         entities = EntityDAO.get_all()
         if not entities:
-            QMessageBox.warning(self, "提示", "数据库中没有提取的实体，请先在'信息提取'面板提取文档信息")
+            QMessageBox.warning(self, "提示", "数据库中没有可用实体，请先在“信息提取”面板提取文档信息")
             return
 
-        self.entity_list = [{"type": e.entity_type, "value": e.entity_value,
-                             "confidence": e.confidence} for e in entities]
+        self.entity_list = [
+            {"type": e.entity_type, "value": e.entity_value, "confidence": e.confidence}
+            for e in entities
+        ]
 
         set_busy_state(self.btn_fill, self.progress, True, busy_text="匹配中...")
 
@@ -212,7 +221,6 @@ class FillPanel(QWidget):
         matches = match_result.get("matches", [])
         unmatched = match_result.get("unmatched_fields", [])
 
-        # 弹出确认对话框
         dlg = FillConfirmDialog(matches, unmatched, self.entity_list, self)
         if dlg.exec() != dlg.DialogCode.Accepted:
             self.result_frame.setVisible(True)
@@ -231,7 +239,6 @@ class FillPanel(QWidget):
             self.lbl_result_path.setText("")
             return
 
-        # 执行填写
         try:
             result = self.template_workflow.fill_confirmed_map(self.current_template_path, fill_map)
             filled_count = result["filled"]
@@ -243,7 +250,7 @@ class FillPanel(QWidget):
 
             self.result_frame.setVisible(True)
             self.empty_state.setVisible(False)
-            self.lbl_result_title.setText(f"填写完成 — {filled_count}/{total_count} 个字段")
+            self.lbl_result_title.setText(f"填写完成 - {filled_count}/{total_count} 个字段")
             detail_parts = [f"准确率: {accuracy_str}"]
             if unmatched_names:
                 detail_parts.append(f"未填写: {', '.join(unmatched_names)}")
@@ -259,8 +266,9 @@ class FillPanel(QWidget):
 
     def _open_result(self):
         if hasattr(self, "result_path") and self.result_path:
-            import sys
             import subprocess
+            import sys
+
             if sys.platform == "win32":
                 os.startfile(self.result_path)
             elif sys.platform == "darwin":

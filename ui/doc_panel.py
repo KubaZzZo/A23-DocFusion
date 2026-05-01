@@ -3,8 +3,8 @@ import asyncio
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit,
-    QLineEdit, QLabel, QFileDialog, QListWidget, QSplitter, QMessageBox,
-    QGroupBox, QProgressBar, QFrame
+    QLineEdit, QLabel, QFileDialog, QSplitter, QMessageBox,
+    QGroupBox, QProgressBar
 )
 from PyQt6.QtCore import Qt
 from core.doc_commander import DocCommander
@@ -30,7 +30,6 @@ class DocPanel(QWidget):
         layout = QVBoxLayout(self)
         apply_panel_density(layout)
 
-        # 上方：文件选择 + 元信息
         file_bar = QHBoxLayout()
         self.btn_open = QPushButton("打开文档")
         mark_secondary(self.btn_open)
@@ -45,14 +44,13 @@ class DocPanel(QWidget):
         file_bar.addWidget(self.lbl_doc_info)
         layout.addLayout(file_bar)
 
-        # 中间：文档预览 + 操作日志（QGroupBox 包裹）
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         preview_group = QGroupBox("文档预览")
         preview_layout = QVBoxLayout(preview_group)
         self.txt_preview = QTextEdit()
         self.txt_preview.setReadOnly(True)
-        self.txt_preview.setPlaceholderText("请点击「打开文档」选择一个文档文件...")
+        self.txt_preview.setPlaceholderText("请点击“打开文档”选择一个文档文件...")
         preview_layout.addWidget(self.txt_preview)
         splitter.addWidget(preview_group)
 
@@ -68,15 +66,13 @@ class DocPanel(QWidget):
         splitter.setSizes([600, 400])
         layout.addWidget(splitter, 1)
 
-        # 进度条
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        # 下方：指令输入
         cmd_bar = QHBoxLayout()
         self.input_cmd = QLineEdit()
-        self.input_cmd.setPlaceholderText("输入自然语言指令，如：把第二段加粗、查找替换'公司'为'企业'...")
+        self.input_cmd.setPlaceholderText("输入自然语言指令，例如：把第二段加粗、查找替换'公司'为'企业'...")
         self.input_cmd.returnPressed.connect(self._execute_command)
         self.btn_exec = QPushButton("执行")
         self.btn_exec.clicked.connect(self._execute_command)
@@ -85,8 +81,12 @@ class DocPanel(QWidget):
         layout.addLayout(cmd_bar)
 
     def _open_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择文档", "",
-                                               "文档文件 (*.docx *.md *.xlsx *.txt *.pdf *.png *.jpg *.jpeg *.bmp)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择文档",
+            "",
+            "文档文件 (*.docx *.md *.xlsx *.txt *.pdf *.png *.jpg *.jpeg *.bmp)",
+        )
         if not path:
             return
 
@@ -97,6 +97,7 @@ class DocPanel(QWidget):
             QMessageBox.critical(self, "解析失败", str(e))
             self._log(f"解析失败: {Path(path).name} - {e}")
             return
+
         doc = DocumentDAO.get_by_id(uploaded["id"])
         text = result["text"]
 
@@ -104,7 +105,7 @@ class DocPanel(QWidget):
         self.lbl_file.setText(f"{doc.filename}")
         char_count = len(text)
         line_count = text.count("\n") + 1
-        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {doc.file_type.upper()}  |  {char_count} 字  |  {line_count} 行")
+        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {doc.file_type.upper()}  |  {char_count} 字 |  {line_count} 行")
         self.txt_preview.setPlainText(text)
         self._log(f"已加载文档: {doc.filename}")
 
@@ -153,7 +154,6 @@ class DocPanel(QWidget):
         self._log("---")
         self.input_cmd.clear()
 
-        # 刷新预览
         if self.current_doc:
             try:
                 r = DocumentParser.parse(self.current_doc.file_path)

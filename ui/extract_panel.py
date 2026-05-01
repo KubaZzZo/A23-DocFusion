@@ -8,14 +8,13 @@ from PyQt6.QtWidgets import (
     QProgressBar, QMessageBox, QHeaderView, QGroupBox, QFrame
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
 from core.document_workflow import DocumentWorkflow
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
 from ui.components import apply_panel_density, mark_danger, mark_secondary
 from ui.task_runner import ProgressTaskWorker, TaskWorker
 
-# 实体类型颜色映射
 ENTITY_COLORS = {
     "person":       ("#5B8DEF", "#EBF1FF", "人名"),
     "organization": ("#52C41A", "#EFFFEB", "机构"),
@@ -53,7 +52,6 @@ class ExtractPanel(QWidget):
         layout = QVBoxLayout(self)
         apply_panel_density(layout)
 
-        # 文件选择栏
         file_bar = QHBoxLayout()
         self.btn_open = QPushButton("选择文档")
         mark_secondary(self.btn_open)
@@ -67,16 +65,13 @@ class ExtractPanel(QWidget):
         file_bar.addWidget(self.btn_batch)
         file_bar.addWidget(self.lbl_file, 1)
 
-        # 文档信息标签
         self.lbl_doc_info = QLabel("")
         self.lbl_doc_info.setStyleSheet("color: #AAA; font-size: 11px; background: transparent;")
         file_bar.addWidget(self.lbl_doc_info)
         layout.addLayout(file_bar)
 
-        # 中间区域
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 左侧：文档文本
         left = QGroupBox("文档内容")
         left_layout = QVBoxLayout(left)
         self.txt_content = QTextEdit()
@@ -85,7 +80,6 @@ class ExtractPanel(QWidget):
         left_layout.addWidget(self.txt_content)
         splitter.addWidget(left)
 
-        # 右侧：提取结果
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -117,7 +111,6 @@ class ExtractPanel(QWidget):
         self.progress.setVisible(False)
         right_layout.addWidget(self.progress)
 
-        # 摘要卡片
         self.summary_frame = QFrame()
         self.summary_frame.setStyleSheet("""
             QFrame {
@@ -140,7 +133,6 @@ class ExtractPanel(QWidget):
         summary_layout.addWidget(self.lbl_summary)
         right_layout.addWidget(self.summary_frame)
 
-        # 实体统计标签栏
         self.stats_bar = QHBoxLayout()
         self.stats_bar_widget = QWidget()
         self.stats_bar_layout = QHBoxLayout(self.stats_bar_widget)
@@ -149,8 +141,7 @@ class ExtractPanel(QWidget):
         self.stats_bar_widget.setVisible(False)
         right_layout.addWidget(self.stats_bar_widget)
 
-        # 实体表格
-        table_header = QLabel("提取的实体:")
+        table_header = QLabel("提取的实体")
         table_header.setStyleSheet("font-weight: bold; background: transparent;")
         right_layout.addWidget(table_header)
         self.entity_table = QTableWidget()
@@ -170,8 +161,10 @@ class ExtractPanel(QWidget):
 
     def _open_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择文档", "",
-            "文档文件 (*.docx *.md *.xlsx *.txt *.pdf *.png *.jpg *.jpeg *.bmp)"
+            self,
+            "选择文档",
+            "",
+            "文档文件 (*.docx *.md *.xlsx *.txt *.pdf *.png *.jpg *.jpeg *.bmp)",
         )
         if not path:
             return
@@ -190,7 +183,7 @@ class ExtractPanel(QWidget):
         self.lbl_file.setText(f"{doc.filename}")
         char_count = len(text)
         line_count = text.count("\n") + 1
-        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {doc.file_type.upper()}  |  {char_count} 字  |  {line_count} 行")
+        self.lbl_doc_info.setText(f"ID:{doc.id}  |  {doc.file_type.upper()}  |  {char_count} 字 |  {line_count} 行")
         self.txt_content.setPlainText(text)
         self.btn_extract.setEnabled(True)
         self.btn_reextract.setEnabled(True)
@@ -202,8 +195,10 @@ class ExtractPanel(QWidget):
 
     def _open_batch_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "批量选择文档", "",
-            "文档文件 (*.docx *.md *.xlsx *.txt *.pdf *.png *.jpg *.jpeg *.bmp)"
+            self,
+            "批量选择文档",
+            "",
+            "文档文件 (*.docx *.md *.xlsx *.txt *.pdf *.png *.jpg *.jpeg *.bmp)",
         )
         if not paths:
             return
@@ -298,7 +293,7 @@ class ExtractPanel(QWidget):
                 self._set_export_enabled(bool(entities))
                 self.summary_frame.setVisible(False)
                 self._render_entities(entities)
-                QMessageBox.information(self, "提示", "当前文档已有提取结果，已直接加载。若需重新生成，请使用“清除并重新提取”。")
+                QMessageBox.information(self, "提示", "当前文档已有提取结果，已直接加载。如需重新生成，请使用“清除并重新提取”。")
                 return
 
         self.btn_extract.setEnabled(False)
@@ -383,14 +378,12 @@ class ExtractPanel(QWidget):
         summary = result.get("summary", "")
         topic = result.get("topic", "")
 
-        # 存入数据库
         if self.current_doc and entities:
             EntityDAO.create_batch(self.current_doc.id, entities)
 
-        # 显示摘要卡片
         if topic or summary:
             self.summary_frame.setVisible(True)
-            self.lbl_topic.setText(f"📌 {topic}" if topic else "")
+            self.lbl_topic.setText(f"💡 {topic}" if topic else "")
             self.lbl_summary.setText(summary)
         else:
             self.summary_frame.setVisible(False)
@@ -422,14 +415,14 @@ class ExtractPanel(QWidget):
         self.lbl_doc_info.setText(f"共提取 {len(entities)} 个实体，失败 {len(failures)} 个文件")
         if failures:
             detail = "\n".join(f"{f['filename']}: {f['error']}" for f in failures[:8])
-            self.txt_content.setPlainText(f"批量提取完成，但有 {len(failures)} 个文件失败:\n{detail}")
+            self.txt_content.setPlainText(f"批量提取完成，但有 {len(failures)} 个文件失败\n{detail}")
         else:
             self.txt_content.setPlainText("批量提取完成，所有文件处理成功。")
         self._render_entities(entities)
         QMessageBox.information(
             self,
             "批量提取完成",
-            f"处理成功 {docs_count} 个文件，提取 {len(entities)} 个实体，失败 {len(failures)} 个文件"
+            f"处理成功 {docs_count} 个文件，提取 {len(entities)} 个实体，失败 {len(failures)} 个文件",
         )
 
     def _on_batch_error(self, msg: str):
@@ -481,7 +474,6 @@ class ExtractPanel(QWidget):
 
     def _update_stats_bar(self, entities: list):
         """更新实体类型统计标签栏"""
-        # 清空旧标签
         while self.stats_bar_layout.count():
             item = self.stats_bar_layout.takeAt(0)
             if item.widget():
@@ -496,7 +488,7 @@ class ExtractPanel(QWidget):
             t = e.get("type", "unknown")
             type_counts[t] = type_counts.get(t, 0) + 1
 
-        total_lbl = QLabel(f"共 {len(entities)} 个实体:")
+        total_lbl = QLabel(f"共 {len(entities)} 个实体")
         total_lbl.setStyleSheet("font-size: 12px; color: #888; background: transparent;")
         self.stats_bar_layout.addWidget(total_lbl)
 

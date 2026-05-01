@@ -1,11 +1,19 @@
-"""LLM设置对话框"""
+"""LLM 设置对话框"""
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QGroupBox, QFormLayout, QMessageBox, QComboBox
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
 )
-from PyQt6.QtCore import Qt
-from config import LLM_CONFIG
-from config import BASE_DIR
+
+from config import BASE_DIR, LLM_CONFIG
+from logger import get_logger
 from llm.provider_health import ProviderHealthChecker, ProviderHealthResult
 from llm.provider_presets import (
     CLOUD_VENDOR_PRESETS,
@@ -15,7 +23,6 @@ from llm.provider_presets import (
     normalize_models_url,
     probe_openai_compatible,
 )
-from logger import get_logger
 from settings_store import (
     apply_saved_settings as _apply_saved_settings,
     decode_key,
@@ -39,27 +46,22 @@ def _format_provider_health_message(vendor_label: str, result: ProviderHealthRes
 
 
 def _encode_key(key: str) -> str:
-    """对 API Key 进行 base64 编码，避免明文存储"""
     return encode_key(key)
 
 
 def _decode_key(encoded: str) -> str:
-    """解码 API Key"""
     return decode_key(encoded)
 
 
 def load_settings() -> dict:
-    """从文件加载设置"""
     return _load_settings(SETTINGS_FILE)
 
 
 def save_settings(settings: dict):
-    """保存设置到文件"""
     _save_settings(settings, SETTINGS_FILE)
 
 
 def apply_saved_settings():
-    """启动时应用已保存的设置到 LLM_CONFIG"""
     _apply_saved_settings(SETTINGS_FILE, LLM_CONFIG)
 
 
@@ -74,8 +76,7 @@ class SettingsDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
-        # Ollama 设置
-        ollama_group = QGroupBox("Ollama (本地模型)")
+        ollama_group = QGroupBox("Ollama（本地模型）")
         ollama_form = QFormLayout(ollama_group)
         self.ollama_url = QLineEdit()
         self.ollama_url.setPlaceholderText("http://localhost:11434")
@@ -88,8 +89,7 @@ class SettingsDialog(QDialog):
         ollama_form.addRow("", self.btn_test_ollama)
         layout.addWidget(ollama_group)
 
-        # OpenAI 设置
-        openai_group = QGroupBox("OpenAI / 兼容API (云端)")
+        openai_group = QGroupBox("OpenAI / 兼容 API（云端）")
         openai_form = QFormLayout(openai_group)
         self.openai_vendor = QComboBox()
         for vendor_id, preset in CLOUD_VENDOR_PRESETS.items():
@@ -111,7 +111,6 @@ class SettingsDialog(QDialog):
         openai_form.addRow("", self.btn_test_openai)
         layout.addWidget(openai_group)
 
-        # 按钮
         btn_bar = QHBoxLayout()
         btn_bar.addStretch()
         self.btn_save = QPushButton("保存")
@@ -151,19 +150,18 @@ class SettingsDialog(QDialog):
 
     def _test_ollama(self):
         import httpx
+
         url = self.ollama_url.text().strip() or "http://localhost:11434"
         try:
             resp = httpx.get(f"{url}/api/tags", timeout=5)
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
             if models:
-                QMessageBox.information(self, "连接成功",
-                                        f"Ollama 连接正常\n可用模型: {', '.join(models[:10])}")
+                QMessageBox.information(self, "连接成功", f"Ollama 连接正常\n可用模型: {', '.join(models[:10])}")
             else:
                 QMessageBox.warning(self, "连接成功", "Ollama 已连接，但未找到已下载的模型")
         except Exception as e:
-            QMessageBox.critical(self, "连接失败",
-                                 f"无法连接到 Ollama\n地址: {url}\n错误: {e}")
+            QMessageBox.critical(self, "连接失败", f"无法连接到 Ollama\n地址: {url}\n错误: {e}")
 
     def _test_openai(self):
         api_key = self.openai_key.text().strip()
@@ -192,7 +190,6 @@ class SettingsDialog(QDialog):
             )
 
     def _save(self):
-        # 更新运行时配置
         LLM_CONFIG["ollama"]["base_url"] = self.ollama_url.text().strip() or "http://localhost:11434"
         LLM_CONFIG["ollama"]["model"] = self.ollama_model.text().strip() or "qwen2.5:7b"
         LLM_CONFIG["openai"]["vendor"] = self.openai_vendor.currentData() or "openai"
@@ -200,7 +197,6 @@ class SettingsDialog(QDialog):
         LLM_CONFIG["openai"]["base_url"] = self.openai_url.text().strip() or "https://api.openai.com/v1"
         LLM_CONFIG["openai"]["model"] = self.openai_model.text().strip() or "gpt-4o-mini"
 
-        # 持久化（API Key 编码存储）
         settings = {
             "provider": LLM_CONFIG["provider"],
             "ollama_url": LLM_CONFIG["ollama"]["base_url"],

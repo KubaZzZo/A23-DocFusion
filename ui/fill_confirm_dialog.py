@@ -1,17 +1,22 @@
 """填写确认对话框 - 用户可预览和修改匹配结果"""
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QMessageBox, QLineEdit
-)
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QHeaderView,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
 
 
 class FillConfirmDialog(QDialog):
-    """展示语义匹配结果，允许用户修改后确认"""
+    """展示语义匹配结果，允许用户修改后确认。"""
 
-    def __init__(self, matches: list[dict], unmatched: list[str],
-                 entities: list[dict], parent=None):
+    def __init__(self, matches: list[dict], unmatched: list[str], entities: list[dict], parent=None):
         super().__init__(parent)
         self.setWindowTitle("填写确认 - 请检查匹配结果")
         self.setMinimumSize(700, 500)
@@ -29,7 +34,6 @@ class FillConfirmDialog(QDialog):
         tip.setStyleSheet("color: #666; font-size: 13px; background: transparent; padding: 4px;")
         layout.addWidget(tip)
 
-        # 匹配结果表格
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["模板字段", "匹配值", "实体类型", "置信度"])
@@ -37,51 +41,44 @@ class FillConfirmDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setAlternatingRowColors(True)
 
-        # 构建实体值列表供下拉选择
-        entity_values = ["(不填写)"] + [f"[{e.get('type')}] {e.get('value')}" for e in self.entities]
-
-        all_fields = self.matches + [{"field": f, "value": "", "confidence": 0, "source_entity_type": ""} for f in self.unmatched]
+        all_fields = self.matches + [
+            {"field": field_name, "value": "", "confidence": 0, "source_entity_type": ""}
+            for field_name in self.unmatched
+        ]
         self.table.setRowCount(len(all_fields))
         self.field_edits = []
 
-        for i, m in enumerate(all_fields):
-            # 字段名（只读）
-            field_item = QTableWidgetItem(m.get("field", ""))
+        for row, match in enumerate(all_fields):
+            field_item = QTableWidgetItem(match.get("field", ""))
             field_item.setFlags(field_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(i, 0, field_item)
+            self.table.setItem(row, 0, field_item)
 
-            # 匹配值（可编辑输入框）
-            edit = QLineEdit(m.get("value", ""))
+            edit = QLineEdit(match.get("value", ""))
             edit.setPlaceholderText("输入或留空跳过")
-            self.table.setCellWidget(i, 1, edit)
-            self.field_edits.append((m.get("field", ""), edit))
+            self.table.setCellWidget(row, 1, edit)
+            self.field_edits.append((match.get("field", ""), edit))
 
-            # 实体类型
-            type_item = QTableWidgetItem(m.get("source_entity_type", "未匹配"))
+            type_item = QTableWidgetItem(match.get("source_entity_type", "未匹配"))
             type_item.setFlags(type_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(i, 2, type_item)
+            self.table.setItem(row, 2, type_item)
 
-            # 置信度
-            conf = m.get("confidence", 0)
-            conf_item = QTableWidgetItem(f"{conf:.0%}" if conf else "—")
-            conf_item.setFlags(conf_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(i, 3, conf_item)
+            confidence = match.get("confidence", 0)
+            confidence_item = QTableWidgetItem(f"{confidence:.0%}" if confidence else "-")
+            confidence_item.setFlags(confidence_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 3, confidence_item)
 
-            # 未匹配的行标红
-            if not m.get("value"):
+            if not match.get("value"):
                 for col in range(4):
-                    item = self.table.item(i, col)
+                    item = self.table.item(row, col)
                     if item:
                         item.setBackground(Qt.GlobalColor.yellow)
 
         layout.addWidget(self.table, 1)
 
-        # 统计
-        stats = QLabel(f"已匹配: {len(self.matches)} 个字段 | 未匹配: {len(self.unmatched)} 个字段")
+        stats = QLabel(f"已匹配 {len(self.matches)} 个字段 | 未匹配 {len(self.unmatched)} 个字段")
         stats.setStyleSheet("color: #888; background: transparent;")
         layout.addWidget(stats)
 
-        # 按钮
         btn_bar = QHBoxLayout()
         btn_bar.addStretch()
         self.btn_cancel = QPushButton("取消")
@@ -102,5 +99,5 @@ class FillConfirmDialog(QDialog):
         self.accept()
 
     def get_fill_map(self) -> dict:
-        """返回用户确认后的 {字段名: 填写值} 映射"""
+        """返回用户确认后的 {字段名: 填写值} 映射。"""
         return self.confirmed_map

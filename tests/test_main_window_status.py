@@ -1,5 +1,7 @@
 """Main window LLM status presentation tests."""
 
+from pathlib import Path
+
 from ui.main_window import _llm_status_snapshot
 
 
@@ -38,9 +40,29 @@ def test_llm_status_snapshot_formats_cloud_vendor_runtime_config():
     assert "deepseek-chat" in snapshot["summary"]
 
 
-def test_main_window_top_bar_has_distinct_model_and_endpoint_labels():
-    source = __import__("pathlib").Path("ui/main_window.py").read_text(encoding="utf-8")
+def test_main_window_uses_shared_status_bar_module():
+    source = Path("ui/main_window.py").read_text(encoding="utf-8")
 
-    assert "self.lbl_llm_model" in source
-    assert "self.lbl_llm_endpoint" in source
-    assert "self._refresh_llm_status" in source
+    assert "from ui.main_status_bar import MainStatusBar, llm_status_snapshot" in source
+    assert "self.status_bar_widget = MainStatusBar(self._open_settings, self._on_provider_changed)" in source
+    assert "def _refresh_llm_status" in source
+
+
+def test_main_window_keeps_top_level_menu_setup():
+    source = Path("ui/main_window.py").read_text(encoding="utf-8")
+
+    assert "self._init_menu()" in source
+    assert "def _init_menu(self):" in source
+
+
+def test_main_window_updates_status_bar_on_provider_change():
+    source = Path("ui/main_window.py").read_text(encoding="utf-8")
+
+    assert "def _on_provider_changed(self, provider):" in source
+    assert "self.statusBar().showMessage(f\"当前 LLM 提供方: {provider}\")" in source
+
+
+def test_main_window_has_no_dead_llm_change_entrypoint():
+    source = Path("ui/main_window.py").read_text(encoding="utf-8")
+
+    assert "def _on_llm_changed(self, index):" not in source

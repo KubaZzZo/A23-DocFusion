@@ -1,6 +1,4 @@
 """新闻爬虫管理面板"""
-import asyncio
-from uuid import uuid4
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QCheckBox, QSpinBox, QProgressBar, QTableWidget, QTableWidgetItem,
@@ -9,12 +7,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from crawler.news_spider import NewsSpider, NEWS_SOURCES
 from crawler.doc_generator import DocGenerator
-from crawler.doc_generator import _safe_filename
 from core.document_workflow import DocumentWorkflow
-from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
 from core.entity_extractor import EntityExtractor
 from config import CRAWLED_DIR
+from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
 from ui.components import apply_panel_density, mark_secondary, set_log_height
+from ui.crawler_task_adapter import CrawlerTaskAdapter
 from ui.task_runner import ProgressTaskWorker, TaskWorker
 from logger import get_logger
 
@@ -23,7 +21,7 @@ log = get_logger("ui.crawler_panel")
 
 class CrawlWorker(QThread):
     """爬取线程"""
-    progress = pyqtSignal(str, int, int, str)  # source_name, current, total, message
+    progress = pyqtSignal(str, int, int, str)
     article_found = pyqtSignal(dict)
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
@@ -43,8 +41,8 @@ class CrawlWorker(QThread):
                     self.progress.emit(s, cur, total, message)
 
                 articles = spider.crawl(src, self.count, on_progress)
-                for a in articles:
-                    self.article_found.emit(a)
+                for article in articles:
+                    self.article_found.emit(article)
                 all_articles.extend(articles)
             self.finished.emit(all_articles)
         except Exception as e:
@@ -58,16 +56,23 @@ class CrawlerPanel(QWidget):
     def __init__(self):
         super().__init__()
         self.crawled_articles = []
+        self.task_adapter = CrawlerTaskAdapter(
+            article_dao=CrawledArticleDAO,
+            document_dao=DocumentDAO,
+            entity_dao=EntityDAO,
+            document_workflow_cls=DocumentWorkflow,
+            entity_extractor_cls=EntityExtractor,
+            doc_generator=DocGenerator,
+            crawled_dir=CRAWLED_DIR,
+        )
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
         apply_panel_density(layout)
 
-        # 上方控制区
         ctrl_layout = QHBoxLayout()
 
-        # 新闻源选择
         src_group = QGroupBox("新闻源")
         src_layout = QVBoxLayout(src_group)
         self.source_checks = {}
@@ -78,7 +83,6 @@ class CrawlerPanel(QWidget):
             src_layout.addWidget(cb)
         ctrl_layout.addWidget(src_group)
 
-        # 爬取设置
         settings_group = QGroupBox("设置")
         settings_layout = QVBoxLayout(settings_group)
 
@@ -108,7 +112,6 @@ class CrawlerPanel(QWidget):
 
         ctrl_layout.addWidget(settings_group)
 
-        # 状态信息
         status_group = QGroupBox("状态")
         status_layout = QVBoxLayout(status_group)
         self.lbl_status = QLabel("就绪")
@@ -126,10 +129,8 @@ class CrawlerPanel(QWidget):
 
         layout.addLayout(ctrl_layout)
 
-        # 下方：结果表格 + 文章预览
         bottom_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # 结果表格
         table_widget = QWidget()
         table_layout = QVBoxLayout(table_widget)
         table_layout.setContentsMargins(0, 0, 0, 0)
@@ -162,7 +163,6 @@ class CrawlerPanel(QWidget):
         table_layout.addWidget(self.result_table)
         bottom_splitter.addWidget(table_widget)
 
-        # 文章预览区
         preview_group = QGroupBox("文章预览")
         preview_layout = QVBoxLayout(preview_group)
         self.txt_preview = QTextEdit()
@@ -180,7 +180,6 @@ class CrawlerPanel(QWidget):
     def _log(self, text: str):
         self.txt_log.append(text)
 
-    # ---- 爬取 ----
     def _start_crawl(self):
         sources = self._get_selected_sources()
         if not sources:
@@ -238,7 +237,6 @@ class CrawlerPanel(QWidget):
         self._log(f"错误: {msg}")
         QMessageBox.critical(self, "爬取失败", msg)
 
-    # ---- 生成文档 ----
     def _generate_docs(self):
         if not self.crawled_articles:
             return
@@ -249,7 +247,7 @@ class CrawlerPanel(QWidget):
         self._log("开始生成测试文档...")
 
         self.gen_worker = TaskWorker(
-            lambda: DocGenerator.generate_all(self.crawled_articles),
+            lambda: self.task_adapter.generate_documents(self.crawled_articles),
             error_prefix="document generation",
         )
         self.gen_worker.succeeded.connect(self._on_gen_done)
@@ -262,9 +260,11 @@ class CrawlerPanel(QWidget):
         self.btn_gen_docs.setText("生成测试文档")
         total = sum(len(v) for v in paths.values())
         self.lbl_status.setText(f"文档生成完成，共 {total} 个文件")
-        self._log(f"生成完成: docx={len(paths.get('docx', []))} txt={len(paths.get('txt', []))} "
-                  f"md={len(paths.get('md', []))} xlsx={len(paths.get('xlsx', []))}")
-        self._log(f"输出目录: data/crawled/")
+        self._log(
+            f"生成完成: docx={len(paths.get('docx', []))} txt={len(paths.get('txt', []))} "
+            f"md={len(paths.get('md', []))} xlsx={len(paths.get('xlsx', []))}"
+        )
+        self._log("输出目录: data/crawled/")
         QMessageBox.information(self, "完成", f"已生成 {total} 个测试文档到 data/crawled/ 目录")
 
     def _on_gen_error(self, msg: str):
@@ -274,11 +274,10 @@ class CrawlerPanel(QWidget):
         self._log(f"生成错误: {msg}")
         QMessageBox.critical(self, "生成失败", msg)
 
-    # ---- 导入数据库 ----
     def _import_to_db(self):
         if not self.crawled_articles:
             return
-        self.btn_import.setText("????")
+        self.btn_import.setText("取消导入")
         try:
             self.btn_import.clicked.disconnect()
         except TypeError:
@@ -286,7 +285,7 @@ class CrawlerPanel(QWidget):
         self.btn_import.clicked.connect(self._cancel_import)
         self.progress.setVisible(True)
         self.progress.setRange(0, len(self.crawled_articles))
-        self._log("????????????...")
+        self._log("开始导入到数据库...")
 
         self.import_worker = ProgressTaskWorker(
             lambda progress: self._run_import_task(
@@ -305,91 +304,26 @@ class CrawlerPanel(QWidget):
         if hasattr(self, "import_worker") and self.import_worker.isRunning():
             self.import_worker.requestInterruption()
             self.btn_import.setEnabled(False)
-            self.btn_import.setText("????...")
-            self.lbl_status.setText("?????????????????")
-            self._log("???????")
+            self.btn_import.setText("取消中...")
+            self.lbl_status.setText("正在取消导入...")
+            self._log("用户取消导入")
 
     @staticmethod
     def _run_import_task(articles: list[dict], progress, should_cancel=None) -> dict:
-        total = len(articles)
-        entity_count = 0
-        processed = 0
-        if articles:
-            CrawledArticleDAO.create_batch(articles)
-        loop = asyncio.new_event_loop()
-        try:
-            extractor = EntityExtractor()
-            document_workflow = DocumentWorkflow(upload_dir=CRAWLED_DIR)
-
-            async def _extract_one(job: dict):
-                try:
-                    result = await extractor.extract(job["content"])
-                    entities = result.get("entities", [])
-                    if entities:
-                        EntityDAO.create_batch(job["doc_id"], entities)
-                        return len(entities)
-                except Exception as e:
-                    log.warning("????????????? %s - %s", job["title"], e)
-                return 0
-
-            async def _run_jobs():
-                nonlocal entity_count, processed
-                sem = asyncio.Semaphore(3)
-                pending = set()
-
-                async def _bounded(job: dict):
-                    async with sem:
-                        return await _extract_one(job)
-
-                for article in articles:
-                    if should_cancel and should_cancel():
-                        break
-                    content = article.get("content", "")
-                    if not content:
-                        processed += 1
-                        progress({"current": processed, "total": total})
-                        continue
-                    title = article.get("title", "article")
-                    digest = uuid4().hex[:8]
-                    filename = f"crawled_{_safe_filename(title, 30)}_{digest}.txt"
-                    uploaded = document_workflow.upload_document(filename, content.encode("utf-8"))
-                    DocumentDAO.update_text(uploaded["id"], content)
-                    doc = DocumentDAO.get_by_id(uploaded["id"])
-                    pending.add(asyncio.create_task(_bounded({"title": title, "content": content, "doc_id": doc.id})))
-
-                    while len(pending) >= 3:
-                        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                        for task in done:
-                            entity_count += task.result()
-                            processed += 1
-                            progress({"current": processed, "total": total})
-                            if should_cancel and should_cancel():
-                                for left in pending:
-                                    left.cancel()
-                                await asyncio.gather(*pending, return_exceptions=True)
-                                return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": True}
-
-                while pending:
-                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        entity_count += task.result()
-                        processed += 1
-                        progress({"current": processed, "total": total})
-                        if should_cancel and should_cancel():
-                            for left in pending:
-                                left.cancel()
-                            await asyncio.gather(*pending, return_exceptions=True)
-                            return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": True}
-
-                return {"entity_count": entity_count, "processed": processed, "total": total, "cancelled": False}
-
-            return loop.run_until_complete(_run_jobs())
-        finally:
-            loop.close()
+        adapter = CrawlerTaskAdapter(
+            article_dao=CrawledArticleDAO,
+            document_dao=DocumentDAO,
+            entity_dao=EntityDAO,
+            document_workflow_cls=DocumentWorkflow,
+            entity_extractor_cls=EntityExtractor,
+            doc_generator=DocGenerator,
+            crawled_dir=CRAWLED_DIR,
+        )
+        return adapter.import_articles(articles, progress, should_cancel)
 
     def _restore_import_button(self):
         self.btn_import.setEnabled(True)
-        self.btn_import.setText("??????")
+        self.btn_import.setText("导入到数据库")
         try:
             self.btn_import.clicked.disconnect()
         except TypeError:
@@ -404,29 +338,29 @@ class CrawlerPanel(QWidget):
             processed = result.get("processed", len(self.crawled_articles))
             total = result.get("total", len(self.crawled_articles))
             if result.get("cancelled"):
-                self.lbl_status.setText(f"?????: {processed}/{total}")
-                self._log(f"?????: processed={processed}/{total}, entities={entity_count}")
+                self.lbl_status.setText(f"导入已取消: {processed}/{total}")
+                self._log(f"导入取消: processed={processed}/{total}, entities={entity_count}")
                 QMessageBox.information(
                     self,
-                    "???",
-                    f"?????\n??? {processed}/{total} ???\n?? {entity_count} ???",
+                    "已取消",
+                    f"导入已取消\n已处理 {processed}/{total} 篇\n导入实体 {entity_count} 个",
                 )
                 return
         else:
             entity_count = result
-        self.lbl_status.setText(f"???????? {entity_count} ???")
-        self._log(f"????: articles={len(self.crawled_articles)}, entities={entity_count}")
+        self.lbl_status.setText(f"导入完成，共导入 {entity_count} 个实体")
+        self._log(f"导入完成: articles={len(self.crawled_articles)}, entities={entity_count}")
         QMessageBox.information(
             self,
-            "??",
-            f"??? {len(self.crawled_articles)} ???\n??? {entity_count} ???",
+            "完成",
+            f"共导入 {len(self.crawled_articles)} 篇文章\n实体数量 {entity_count} 个",
         )
 
     def _on_import_error(self, msg: str):
         self.progress.setVisible(False)
         self._restore_import_button()
-        self._log(f"????: {msg}")
-        QMessageBox.critical(self, "????", msg)
+        self._log(f"导入错误: {msg}")
+        QMessageBox.critical(self, "导入失败", msg)
 
     def _select_all(self):
         self.result_table.selectAll()

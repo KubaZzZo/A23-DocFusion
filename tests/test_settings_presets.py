@@ -1,12 +1,12 @@
 """Settings dialog cloud vendor preset tests."""
+from llm.provider_health import ProviderHealthResult
 from ui.settings_dialog import (
     CLOUD_VENDOR_PRESETS,
-    _format_provider_health_message,
     _extract_model_names,
+    _format_provider_health_message,
     _normalize_models_url,
     get_cloud_vendor_preset,
 )
-from llm.provider_health import ProviderHealthResult
 
 
 def test_known_vendor_presets_exist():
@@ -20,6 +20,7 @@ def test_known_vendor_presets_exist():
 
 def test_unknown_vendor_falls_back_to_custom():
     preset = get_cloud_vendor_preset("unknown-vendor")
+
     assert preset["id"] == "custom"
     assert preset["base_url"] == CLOUD_VENDOR_PRESETS["custom"]["base_url"]
 

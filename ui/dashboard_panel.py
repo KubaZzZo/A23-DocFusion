@@ -1,33 +1,49 @@
 """数据概览面板 - 展示系统统计数据"""
 import asyncio
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
-    QFrame, QSplitter, QProgressBar, QScrollArea, QSizePolicy, QLineEdit,
-    QFileDialog, QMessageBox, QTextEdit
-)
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QColor, QFont
 from datetime import datetime
-from db.database import DocumentDAO, EntityDAO, TemplateDAO, CrawledArticleDAO
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QProgressBar,
+    QScrollArea,
+    QSizePolicy,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+    QHeaderView,
+)
+
+from db.database import EntityDAO
 from llm import get_llm
-from ui.components import EmptyState, mark_secondary
-from ui.task_runner import TaskWorker
 from logger import get_logger
+from ui.components import EmptyState, mark_secondary
+from ui.dashboard_view_model import build_dashboard_snapshot
+from ui.task_runner import TaskWorker
 
 log = get_logger("ui.dashboard_panel")
 
-# 实体类型中文名 + 颜色映射
 ENTITY_TYPE_META = {
-    "person":       ("人名",   "#5B8DEF"),
-    "organization": ("机构",   "#52C41A"),
-    "date":         ("日期",   "#FAAD14"),
-    "amount":       ("金额",   "#FF4D4F"),
-    "phone":        ("电话",   "#722ED1"),
-    "email":        ("邮箱",   "#13C2C2"),
-    "address":      ("地址",   "#EB2F96"),
-    "id_number":    ("编号",   "#FA8C16"),
-    "custom":       ("其他",   "#8C8C8C"),
+    "person": ("人名", "#5B8DEF"),
+    "organization": ("机构", "#52C41A"),
+    "date": ("日期", "#FAAD14"),
+    "amount": ("金额", "#FF4D4F"),
+    "phone": ("电话", "#722ED1"),
+    "email": ("邮箱", "#13C2C2"),
+    "address": ("地址", "#EB2F96"),
+    "id_number": ("编号", "#FA8C16"),
+    "custom": ("其他", "#8C8C8C"),
 }
 
 DOC_TYPE_META = {
@@ -42,17 +58,14 @@ DOC_TYPE_META = {
     "bmp": ("BMP", "#8C8C8C"),
 }
 
-
 ENTITY_QA_PROMPT = """你是DocFusion的实体问答助手。请只根据给定的已提取实体数据回答用户问题。
 要求：
 1. 如果实体数据中能找到答案，直接回答并说明依据的实体类型。
 2. 如果无法确定答案，请回答“根据当前实体库无法确定”，不要编造。
-3. 回答要简洁，适合桌面端展示。
-"""
+3. 回答要简洁，适合桌面端展示。"""
 
 
 class StatCard(QWidget):
-    """带彩色顶部边框和图标的统计卡片"""
     def __init__(self, title: str, accent: str = "#5B8DEF", icon_char: str = "", parent=None):
         super().__init__(parent)
         self.setStyleSheet(f"""
@@ -67,7 +80,6 @@ class StatCard(QWidget):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(6)
 
-        # 图标 + 标题行
         header = QHBoxLayout()
         if icon_char:
             icon_lbl = QLabel(icon_char)
@@ -79,31 +91,26 @@ class StatCard(QWidget):
         header.addStretch()
         layout.addLayout(header)
 
-        # 数值
         self.lbl_value = QLabel("0")
         self.lbl_value.setStyleSheet(f"font-size: 36px; font-weight: bold; color: {accent}; background: transparent;")
         layout.addWidget(self.lbl_value)
 
-        # 副标题/描述
         self.lbl_sub = QLabel("")
         self.lbl_sub.setStyleSheet("font-size: 11px; color: #AAAAAA; background: transparent;")
         layout.addWidget(self.lbl_sub)
 
     def set_value(self, value: str, sub: str = ""):
         self.lbl_value.setText(value)
-        if sub:
-            self.lbl_sub.setText(sub)
+        self.lbl_sub.setText(sub)
 
 
 class EntityTypeBar(QWidget):
-    """实体类型分布条"""
     def __init__(self, type_name: str, count: int, max_count: int, color: str, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(8)
 
-        # 类型标签（带色点）
         dot = QLabel("●")
         dot.setFixedWidth(14)
         dot.setStyleSheet(f"color: {color}; font-size: 10px; background: transparent;")
@@ -114,7 +121,6 @@ class EntityTypeBar(QWidget):
         name_lbl.setStyleSheet("font-size: 12px; color: #333; background: transparent;")
         layout.addWidget(name_lbl)
 
-        # 进度条
         bar = QProgressBar()
         bar.setRange(0, max(max_count, 1))
         bar.setValue(count)
@@ -133,7 +139,6 @@ class EntityTypeBar(QWidget):
         """)
         layout.addWidget(bar, 1)
 
-        # 数量
         count_lbl = QLabel(str(count))
         count_lbl.setFixedWidth(40)
         count_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -166,7 +171,6 @@ class DashboardPanel(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
-        # 欢迎横幅
         banner = QFrame()
         banner.setStyleSheet("""
             QFrame {
@@ -187,7 +191,7 @@ class DashboardPanel(QWidget):
         banner_left.addWidget(welcome_sub)
         banner_layout.addLayout(banner_left)
         banner_layout.addStretch()
-        self.btn_refresh = QPushButton("↻ 刷新")
+        self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.setFixedSize(80, 32)
         self.btn_refresh.setStyleSheet("""
             QPushButton {
@@ -203,22 +207,19 @@ class DashboardPanel(QWidget):
         banner_layout.addWidget(self.btn_refresh)
         layout.addWidget(banner)
 
-        # 统计卡片
         cards_layout = QHBoxLayout()
         cards_layout.setSpacing(12)
         self.card_docs = StatCard("文档数量", "#5B8DEF", "📄")
-        self.card_entities = StatCard("实体数量", "#52C41A", "🏷")
-        self.card_templates = StatCard("模板数量", "#FAAD14", "📋")
+        self.card_entities = StatCard("实体数量", "#52C41A", "🔢")
+        self.card_templates = StatCard("模板数量", "#FAAD14", "🧵")
         self.card_articles = StatCard("爬取文章", "#722ED1", "📰")
         for card in [self.card_docs, self.card_entities, self.card_templates, self.card_articles]:
             cards_layout.addWidget(card)
         layout.addLayout(cards_layout)
 
-        # 下半部分：实体分布 + 最近文档 并排
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # 左：实体类型分布
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -232,7 +233,6 @@ class DashboardPanel(QWidget):
         self.entity_bars_container.setSpacing(4)
         entity_layout.addLayout(self.entity_bars_container)
         entity_layout.addStretch()
-        # 总计标签
         self.lbl_entity_total = QLabel("")
         self.lbl_entity_total.setStyleSheet("font-size: 11px; color: #AAA; background: transparent; padding: 4px;")
         entity_layout.addWidget(self.lbl_entity_total)
@@ -258,7 +258,7 @@ class DashboardPanel(QWidget):
         search_bar = QHBoxLayout()
         search_bar.setSpacing(8)
         self.input_entity_search = QLineEdit()
-        self.input_entity_search.setPlaceholderText("输入实体关键词，如姓名、电话、机构...")
+        self.input_entity_search.setPlaceholderText("输入实体关键词，例如姓名、电话、机构...")
         self.input_entity_search.returnPressed.connect(self._search_entities)
         search_bar.addWidget(self.input_entity_search, 1)
         self.btn_entity_search = QPushButton("搜索")
@@ -284,7 +284,6 @@ class DashboardPanel(QWidget):
 
         splitter.addWidget(left_panel)
 
-        # 右：最近文档 + 融合分析
         right_panel = QWidget()
         right_panel_layout = QVBoxLayout(right_panel)
         right_panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -321,7 +320,7 @@ class DashboardPanel(QWidget):
         fusion_layout.setSpacing(8)
         fusion_header = QHBoxLayout()
         fusion_header.setSpacing(8)
-        fusion_hint = QLabel("展示在多个文档中重复出现的实体，体现多源数据融合结果")
+        fusion_hint = QLabel("展示多个文档中重复出现的实体，体现多源数据融合结果")
         fusion_hint.setStyleSheet("font-size: 11px; color: #888; background: transparent;")
         fusion_hint.setWordWrap(True)
         fusion_header.addWidget(fusion_hint, 1)
@@ -382,104 +381,74 @@ class DashboardPanel(QWidget):
         splitter.setSizes([500, 700])
         layout.addWidget(splitter, 1)
 
-    @staticmethod
-    def _clear_layout(layout):
-        while layout.count():
-            item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
     def refresh(self):
-        """刷新所有统计数据"""
         try:
-            docs = DocumentDAO.get_all()
-            entity_count = EntityDAO.count()
-            type_counts = EntityDAO.count_by_type()
-            self.cross_doc_entities = EntityDAO.get_cross_document_entities()
-            templates = TemplateDAO.get_all()
-            articles = CrawledArticleDAO.get_all()
-
-            parsed_count = sum(1 for d in docs if d.raw_text)
-            self.card_docs.set_value(str(len(docs)), f"已解析 {parsed_count} 篇")
-            self.card_entities.set_value(
-                str(entity_count),
-                f"{len(type_counts)} 种类型" if entity_count else "暂无数据"
-            )
-            self.card_templates.set_value(str(len(templates)))
-            self.card_articles.set_value(str(len(articles)))
-
-            # 实体类型分布条形图
-            # 清空旧的分布条
-            self._clear_layout(self.entity_bars_container)
-
-            if type_counts:
-                max_count = max(type_counts.values())
-                for t, c in sorted(type_counts.items(), key=lambda x: -x[1]):
-                    meta = ENTITY_TYPE_META.get(t, (t, "#8C8C8C"))
-                    bar = EntityTypeBar(meta[0], c, max_count, meta[1])
-                    self.entity_bars_container.addWidget(bar)
-                self.lbl_entity_total.setText(f"共 {entity_count} 个实体，{len(type_counts)} 种类型")
-            else:
-                self.entity_bars_container.addWidget(
-                    EmptyState("暂无实体数据", "请先在「信息提取」面板提取文档实体")
-                )
-                self.lbl_entity_total.setText("")
-
-            # 文档类型分布条形图
-            self._clear_layout(self.doc_type_bars_container)
-            doc_type_counts = {}
-            for d in docs:
-                doc_type = (d.file_type or "unknown").lower()
-                doc_type_counts[doc_type] = doc_type_counts.get(doc_type, 0) + 1
-
-            if doc_type_counts:
-                max_doc_count = max(doc_type_counts.values())
-                for t, c in sorted(doc_type_counts.items(), key=lambda x: -x[1]):
-                    meta = DOC_TYPE_META.get(t, (t.upper(), "#8C8C8C"))
-                    bar = EntityTypeBar(meta[0], c, max_doc_count, meta[1])
-                    self.doc_type_bars_container.addWidget(bar)
-                self.lbl_doc_type_total.setText(f"共 {len(docs)} 个文档，{len(doc_type_counts)} 种格式")
-            else:
-                self.doc_type_bars_container.addWidget(
-                    EmptyState("暂无文档类型数据", "上传或导入文档后会显示格式分布")
-                )
-                self.lbl_doc_type_total.setText("")
-
-            # 最近文档
-            recent = docs[:20]
-            self.doc_table.setRowCount(len(recent))
-            for i, d in enumerate(recent):
-                self.doc_table.setItem(i, 0, QTableWidgetItem(d.filename))
-
-                type_item = QTableWidgetItem(d.file_type.upper())
-                type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.doc_table.setItem(i, 1, type_item)
-
-                status = "✔ 已解析" if d.raw_text else "○ 待解析"
-                status_item = QTableWidgetItem(status)
-                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if d.raw_text:
-                    status_item.setForeground(QColor("#52C41A"))
-                else:
-                    status_item.setForeground(QColor("#FAAD14"))
-                self.doc_table.setItem(i, 2, status_item)
-
-                time_str = d.created_at.strftime("%m-%d %H:%M") if d.created_at else ""
-                time_item = QTableWidgetItem(time_str)
-                time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.doc_table.setItem(i, 3, time_item)
-
-            if not recent:
-                self.doc_table.setRowCount(1)
-                empty = QTableWidgetItem("暂无文档，请上传或爬取")
-                empty.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                empty.setForeground(QColor("#CCC"))
-                self.doc_table.setItem(0, 0, empty)
-                self.doc_table.setSpan(0, 0, 1, 4)
-
-            self._render_fusion_table()
+            snapshot = build_dashboard_snapshot()
+            self._render_snapshot(snapshot)
         except Exception as e:
             log.warning("刷新数据概览失败: %s", e)
+
+    def _render_snapshot(self, snapshot):
+        docs = snapshot.docs
+        entity_count = snapshot.entity_count
+        type_counts = snapshot.type_counts
+        self.cross_doc_entities = snapshot.cross_doc_entities
+        parsed_count = snapshot.parsed_count
+        self.card_docs.set_value(str(len(docs)), f"已解析 {parsed_count} 个")
+        self.card_entities.set_value(str(entity_count), f"{len(type_counts)} 种类型" if entity_count else "暂无实体")
+        self.card_templates.set_value(str(snapshot.template_count))
+        self.card_articles.set_value(str(snapshot.article_count))
+
+        self._clear_layout(self.entity_bars_container)
+        if type_counts:
+            max_count = max(type_counts.values())
+            for entity_type, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+                meta = ENTITY_TYPE_META.get(entity_type, (entity_type, "#8C8C8C"))
+                self.entity_bars_container.addWidget(EntityTypeBar(meta[0], count, max_count, meta[1]))
+            self.lbl_entity_total.setText(f"共 {entity_count} 个实体，覆盖 {len(type_counts)} 种类型")
+        else:
+            self.entity_bars_container.addWidget(EmptyState("暂无实体数据", "请先导入并提取文档"))
+            self.lbl_entity_total.setText("")
+
+        self._clear_layout(self.doc_type_bars_container)
+        doc_type_counts = snapshot.doc_type_counts
+        if doc_type_counts:
+            max_doc_count = max(doc_type_counts.values())
+            for doc_type, count in sorted(doc_type_counts.items(), key=lambda x: -x[1]):
+                meta = DOC_TYPE_META.get(doc_type, (doc_type.upper(), "#8C8C8C"))
+                self.doc_type_bars_container.addWidget(EntityTypeBar(meta[0], count, max_doc_count, meta[1]))
+            self.lbl_doc_type_total.setText(f"共 {len(docs)} 个文档，覆盖 {len(doc_type_counts)} 种类型")
+        else:
+            self.doc_type_bars_container.addWidget(EmptyState("暂无文档类型数据", "请先导入文件"))
+            self.lbl_doc_type_total.setText("")
+
+        recent = snapshot.recent_docs
+        self.doc_table.clearSpans()
+        self.doc_table.setRowCount(len(recent))
+        for row, doc in enumerate(recent):
+            self.doc_table.setItem(row, 0, QTableWidgetItem(doc.filename))
+            type_item = QTableWidgetItem((doc.file_type or "").upper())
+            type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.doc_table.setItem(row, 1, type_item)
+            status = "已解析" if doc.raw_text else "待解析"
+            status_item = QTableWidgetItem(status)
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            status_item.setForeground(QColor("#52C41A" if doc.raw_text else "#FAAD14"))
+            self.doc_table.setItem(row, 2, status_item)
+            time_str = doc.created_at.strftime("%m-%d %H:%M") if getattr(doc, "created_at", None) else ""
+            time_item = QTableWidgetItem(time_str)
+            time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.doc_table.setItem(row, 3, time_item)
+
+        if not recent:
+            self.doc_table.setRowCount(1)
+            empty = QTableWidgetItem("暂无文档数据")
+            empty.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setForeground(QColor("#CCC"))
+            self.doc_table.setItem(0, 0, empty)
+            self.doc_table.setSpan(0, 0, 1, 4)
+
+        self._render_fusion_table()
 
     def _render_fusion_table(self):
         self.fusion_table.clearSpans()
@@ -537,12 +506,12 @@ class DashboardPanel(QWidget):
                     item["doc_count"],
                     item["count"],
                     round(avg_confidence, 4) if avg_confidence is not None else "",
-                    "；".join(item["documents"]),
+                    "、".join(item["documents"]),
                 ])
 
             summary = workbook.create_sheet("融合统计")
             summary.append(["指标", "值"])
-            summary.append(["跨文档实体数量", len(self.cross_doc_entities)])
+            summary.append(["跨文档重复实体数", len(self.cross_doc_entities)])
             summary.append(["涉及文档总数", len({doc for item in self.cross_doc_entities for doc in item["documents"]})])
             summary.append(["报告生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
 
@@ -599,8 +568,7 @@ class DashboardPanel(QWidget):
             context_lines = []
             for i, entity in enumerate(entities[:300], start=1):
                 context_lines.append(
-                    f"{i}. 类型={entity['type']}；值={entity['value']}；上下文={entity['context']}；"
-                    f"置信度={entity['confidence']}"
+                    f"{i}. 类型={entity['type']}；值={entity['value']}；上下文={entity['context']}；置信度={entity['confidence']}"
                 )
             context = "\n".join(context_lines)
             messages = [

@@ -1,31 +1,29 @@
 """主窗口"""
 import sys
 import threading
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QStatusBar,
-    QMenuBar, QMenu, QMessageBox, QVBoxLayout, QWidget, QComboBox,
-    QHBoxLayout, QLabel, QPushButton, QFrame
-)
-from PyQt6.QtCore import Qt, QByteArray
-from PyQt6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter
+
+from PyQt6.QtCore import QByteArray, Qt
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
+from PyQt6.QtWidgets import QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+
 try:
     from PyQt6.QtSvg import QSvgRenderer
     _HAS_SVG = True
 except ImportError:
     _HAS_SVG = False
+
+from config import LLM_CONFIG
+from ui.crawler_panel import CrawlerPanel
+from ui.dashboard_panel import DashboardPanel
 from ui.doc_panel import DocPanel
 from ui.extract_panel import ExtractPanel
 from ui.fill_panel import FillPanel
-from ui.crawler_panel import CrawlerPanel
-from ui.dashboard_panel import DashboardPanel
-from ui.settings_dialog import SettingsDialog, apply_saved_settings
-from ui.styles import GLOBAL_QSS, BG_MAIN, BG_CARD, TEXT_PRIMARY, TEXT_SECONDARY, PRIMARY, BORDER
-from config import LLM_CONFIG
-from llm.provider_presets import get_cloud_vendor_preset
+from ui.main_status_bar import MainStatusBar, llm_status_snapshot
+from ui.settings_dialog import SettingsDialog
+from ui.styles import BG_CARD, BG_MAIN, BORDER, GLOBAL_QSS, PRIMARY, TEXT_PRIMARY, TEXT_SECONDARY
 
 
 def _svg_icon(svg_str: str, size: int = 20) -> QIcon:
-    """将 SVG 字符串转为 QIcon，QtSvg 不可用时返回空图标"""
     if not _HAS_SVG:
         return QIcon()
     renderer = QSvgRenderer(QByteArray(svg_str.encode("utf-8")))
@@ -37,7 +35,6 @@ def _svg_icon(svg_str: str, size: int = 20) -> QIcon:
     return QIcon(pixmap)
 
 
-# 线条风格 SVG 图标（stroke-based, 24x24 viewBox）
 _COLOR = "#5B8DEF"
 
 ICON_DASHBOARD = f'''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
@@ -79,44 +76,9 @@ ICON_GLOBE = f'''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" 
   <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
 </svg>'''
 
-ICON_SETTINGS = f'''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
-  fill="none" stroke="{_COLOR}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="3"/>
-  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33
-    1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06
-    a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15 1.65 1.65 0 0 0 3.17 14H3a2 2 0 0 1 0-4h.09
-    A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0
-    9 4.68 1.65 1.65 0 0 0 10 3.17V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33
-    l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4
-    h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-</svg>'''
-
 
 def _llm_status_snapshot(config: dict | None = None) -> dict:
-    """Build user-facing LLM status text from runtime config."""
-
-    cfg = config or LLM_CONFIG
-    provider = cfg.get("provider", "ollama")
-    if provider == "ollama":
-        ollama = cfg.get("ollama", {})
-        label = "Ollama"
-        model = ollama.get("model") or "未配置模型"
-        url = ollama.get("base_url") or "http://localhost:11434"
-    else:
-        cloud = cfg.get("openai", {})
-        preset = get_cloud_vendor_preset(cloud.get("vendor", "openai"))
-        label = preset.get("label", cloud.get("vendor", "OpenAI兼容"))
-        model = cloud.get("model") or preset.get("model_placeholder") or "未配置模型"
-        url = cloud.get("base_url") or preset.get("base_url") or "未配置地址"
-
-    return {
-        "provider": provider,
-        "label": label,
-        "model": model,
-        "url": url,
-        "summary": f"{label} · {model}",
-        "tooltip": f"当前 LLM: {label}\n模型: {model}\n服务地址: {url}",
-    }
+    return llm_status_snapshot(config)
 
 
 class MainWindow(QMainWindow):
@@ -124,77 +86,16 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("DocFusion - 文档理解与多源数据融合系统")
         self.setMinimumSize(1100, 750)
-
-        # 菜单栏
         self._init_menu()
 
-        # 中心区域
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # 顶部工具栏
-        top_bar = QFrame()
-        top_bar.setStyleSheet("""
-            QFrame {
-                background: #FFFFFF;
-                border: 1px solid #E0E0E0;
-                border-radius: 8px;
-            }
-        """)
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(16, 8, 16, 8)
+        self.status_bar_widget = MainStatusBar(self._open_settings, self._on_provider_changed)
+        layout.addWidget(self.status_bar_widget)
 
-        # 品牌标识
-        brand = QLabel("DocFusion")
-        brand.setStyleSheet("font-size: 16px; font-weight: bold; color: #5B8DEF; background: transparent;")
-        top_layout.addWidget(brand)
-        ver = QLabel("v1.0")
-        ver.setStyleSheet("font-size: 10px; color: #CCC; background: transparent; margin-top: 4px;")
-        top_layout.addWidget(ver)
-
-        # 分隔线
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #E0E0E0; background: transparent;")
-        sep.setFixedHeight(24)
-        top_layout.addWidget(sep)
-
-        # LLM 引擎选择
-        llm_label = QLabel("LLM引擎")
-        llm_label.setStyleSheet("font-size: 12px; color: #888; background: transparent;")
-        top_layout.addWidget(llm_label)
-        self.llm_combo = QComboBox()
-        self.llm_combo.addItems(["ollama (本地)", "openai (云端)"])
-        self.llm_combo.setCurrentIndex(0 if LLM_CONFIG["provider"] == "ollama" else 1)
-        self.llm_combo.currentIndexChanged.connect(self._on_llm_changed)
-        self.llm_combo.setFixedWidth(160)
-        top_layout.addWidget(self.llm_combo)
-
-        # LLM 状态指示灯
-        self.lbl_llm_status = QLabel("● 就绪")
-        self.lbl_llm_status.setStyleSheet("font-size: 11px; color: #52C41A; background: transparent;")
-        top_layout.addWidget(self.lbl_llm_status)
-        self.lbl_llm_model = QLabel("")
-        self.lbl_llm_model.setStyleSheet("font-size: 12px; color: #333; background: transparent; font-weight: 600;")
-        top_layout.addWidget(self.lbl_llm_model)
-        self.lbl_llm_endpoint = QLabel("")
-        self.lbl_llm_endpoint.setStyleSheet("font-size: 11px; color: #888; background: transparent;")
-        top_layout.addWidget(self.lbl_llm_endpoint)
-        self._refresh_llm_status()
-
-        top_layout.addStretch()
-
-        # 设置按钮
-        self.btn_settings = QPushButton(_svg_icon(ICON_SETTINGS), " 设置")
-        self.btn_settings.setFixedWidth(90)
-        self.btn_settings.clicked.connect(self._open_settings)
-        top_layout.addWidget(self.btn_settings)
-
-        layout.addWidget(top_bar)
-
-        # Tab页
         self.tabs = QTabWidget()
         self.dashboard_panel = DashboardPanel()
         self.doc_panel = DocPanel()
@@ -211,11 +112,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
-
-        # 状态栏
         self.statusBar().showMessage("就绪")
-
-        # 启动API服务
         self._start_api()
 
     def _init_menu(self):
@@ -228,27 +125,20 @@ class MainWindow(QMainWindow):
         help_menu = menu_bar.addMenu("帮助")
         help_menu.addAction("关于", self._show_about)
 
-    def _on_llm_changed(self, index):
-        LLM_CONFIG["provider"] = "ollama" if index == 0 else "openai"
-        provider = LLM_CONFIG["provider"]
-        self.lbl_llm_status.setText("? ???")
-        self.lbl_llm_status.setStyleSheet("font-size: 11px; color: #FAAD14; background: transparent;")
-        self._refresh_llm_status()
-        self.statusBar().showMessage(f"???LLM??: {provider}")
+    def _on_provider_changed(self, provider):
+        self.statusBar().showMessage(f"当前 LLM 提供方: {provider}")
 
     def _open_settings(self):
         dlg = SettingsDialog(self)
         dlg.exec()
-        self._refresh_llm_status()
+        self._sync_status_bar_to_config()
 
     def _refresh_llm_status(self):
-        snapshot = _llm_status_snapshot()
-        self.lbl_llm_model.setText(snapshot["summary"])
-        self.lbl_llm_endpoint.setText(snapshot["url"])
-        tooltip = snapshot["tooltip"]
-        self.lbl_llm_status.setToolTip(tooltip)
-        self.lbl_llm_model.setToolTip(tooltip)
-        self.lbl_llm_endpoint.setToolTip(tooltip)
+        self.status_bar_widget.refresh_llm_status()
+
+    def _sync_status_bar_to_config(self):
+        self.status_bar_widget.llm_combo.setCurrentIndex(0 if LLM_CONFIG["provider"] == "ollama" else 1)
+        self.status_bar_widget.refresh_llm_status()
 
     def _on_tab_changed(self, index):
         if index == 0:
@@ -256,17 +146,22 @@ class MainWindow(QMainWindow):
 
     def _start_api(self):
         from api.server import start_api_server
+
         t = threading.Thread(target=start_api_server, daemon=True)
         t.start()
-        self.statusBar().showMessage("API服务已启动 (http://127.0.0.1:8000)")
+        self.statusBar().showMessage("API 服务已启动 (http://127.0.0.1:8000)")
 
     def _show_about(self):
-        QMessageBox.about(self, "关于",
-                          "DocFusion v1.0\n文档理解与多源数据融合系统\nA23赛题参赛作品")
+        from PyQt6.QtWidgets import QMessageBox
+
+        QMessageBox.about(
+            self,
+            "关于",
+            "DocFusion v1.0\n文档理解与多源数据融合系统\nA23 赛题参赛作品",
+        )
 
 
 def _apply_light_palette(app: QApplication):
-    """设置浅色调色板"""
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(BG_MAIN))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_PRIMARY))
