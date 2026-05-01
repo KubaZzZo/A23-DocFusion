@@ -1,7 +1,7 @@
 """文档解析器测试"""
 import pytest
 from pathlib import Path
-from core.document_parser import DocumentParser
+from core.document_parser import DocumentParser, ParserAdapter
 
 TEST_DIR = Path(__file__).parent / "test_data"
 TEST_DIR.mkdir(exist_ok=True)
@@ -76,3 +76,25 @@ class TestDocumentParser:
         assert first["text"] == "cache me"
         assert second["text"] == "cache me"
         assert calls["count"] == 1
+
+    def test_can_register_parser_adapter_for_new_format(self):
+        path = TEST_DIR / "adapter.custom"
+        path.write_text("adapter content", encoding="utf-8")
+
+        old_adapters = dict(DocumentParser._ADAPTERS)
+        old_supported = set(DocumentParser.SUPPORTED_TYPES)
+        DocumentParser._CACHE.clear()
+        try:
+            DocumentParser.register_adapter(
+                ParserAdapter({".custom"}, lambda p: f"parsed: {p.read_text(encoding='utf-8')}")
+            )
+
+            result = DocumentParser.parse(str(path))
+
+            assert result["text"] == "parsed: adapter content"
+            assert result["file_type"] == "custom"
+        finally:
+            DocumentParser._ADAPTERS = old_adapters
+            DocumentParser.SUPPORTED_TYPES = old_supported
+            DocumentParser._CACHE.clear()
+            path.unlink(missing_ok=True)

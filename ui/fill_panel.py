@@ -6,45 +6,18 @@ from PyQt6.QtWidgets import (
     QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QSplitter,
     QProgressBar, QMessageBox, QListWidget, QHeaderView, QGroupBox, QFrame
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt
 from core.template_filler import TemplateFiller
 from core.semantic_matcher import SemanticMatcher
 from db.database import EntityDAO, TemplateDAO
 from ui.fill_confirm_dialog import FillConfirmDialog
+from ui.task_runner import TaskWorker
 from config import UPLOAD_DIR, OUTPUT_DIR
 from utils.file_utils import safe_copy
 import json
 import os
 import shutil as sh
 from datetime import datetime
-
-
-class MatchWorker(QThread):
-    """语义匹配线程"""
-    finished = pyqtSignal(dict, dict)  # match_result, analysis
-    error = pyqtSignal(str)
-
-    def __init__(self, template_path, entities):
-        super().__init__()
-        self.template_path = template_path
-        self.entities = entities
-
-    def run(self):
-        loop = asyncio.new_event_loop()
-        try:
-            filler = TemplateFiller()
-            analysis = loop.run_until_complete(filler.analyze_template(self.template_path))
-            field_names = analysis.get("field_names", [])
-            if not field_names:
-                self.error.emit("模板中未找到需要填写的字段")
-                return
-            matcher = SemanticMatcher()
-            match_result = loop.run_until_complete(matcher.match(field_names, self.entities))
-            self.finished.emit(match_result, analysis)
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 class FillPanel(QWidget):
@@ -207,12 +180,31 @@ class FillPanel(QWidget):
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
 
-        self.match_worker = MatchWorker(self.current_template_path, self.entity_list)
-        self.match_worker.finished.connect(self._on_match_done)
-        self.match_worker.error.connect(self._on_fill_error)
+        self.match_worker = TaskWorker(
+            lambda: self._run_match_task(self.current_template_path, self.entity_list),
+            error_prefix="template matching",
+        )
+        self.match_worker.succeeded.connect(self._on_match_done)
+        self.match_worker.failed.connect(self._on_fill_error)
         self.match_worker.start()
 
-    def _on_match_done(self, match_result, analysis):
+    def _run_match_task(self, template_path: str, entities: list[dict]) -> tuple[dict, dict]:
+        loop = asyncio.new_event_loop()
+        try:
+            filler = TemplateFiller()
+            analysis = loop.run_until_complete(filler.analyze_template(template_path))
+            field_names = analysis.get("field_names", [])
+            if not field_names:
+                raise RuntimeError("模板中未找到需要填写的字段")
+            matcher = SemanticMatcher()
+            match_result = loop.run_until_complete(matcher.match(field_names, entities))
+            return match_result, analysis
+        finally:
+            loop.close()
+
+    def _on_match_done(self, match_result, analysis=None):
+        if analysis is None:
+            match_result, analysis = match_result
         self.progress.setVisible(False)
         self.btn_fill.setEnabled(True)
         self.btn_fill.setText("开始自动填写")

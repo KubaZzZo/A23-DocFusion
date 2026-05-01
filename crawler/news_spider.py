@@ -38,6 +38,22 @@ NEWS_SOURCES = {
 }
 
 
+class NewsSpiderError(Exception):
+    """Base exception for crawler failures."""
+
+
+class NetworkFetchError(NewsSpiderError):
+    """Raised when a page cannot be fetched."""
+
+
+class ListParseError(NewsSpiderError):
+    """Raised when a source list page cannot be parsed."""
+
+
+class ArticleParseError(NewsSpiderError):
+    """Raised when one article detail page cannot be parsed."""
+
+
 class NewsSpider:
     def __init__(self):
         self.client = httpx.Client(
@@ -47,8 +63,11 @@ class NewsSpider:
         )
 
     def _get_soup(self, url: str) -> BeautifulSoup:
-        resp = self.client.get(url)
-        resp.raise_for_status()
+        try:
+            resp = self.client.get(url)
+            resp.raise_for_status()
+        except httpx.HTTPError as e:
+            raise NetworkFetchError(f"请求失败: {url}") from e
         return BeautifulSoup(resp.text, "lxml")
 
     @staticmethod
@@ -74,44 +93,88 @@ class NewsSpider:
             return []
         return fn(count, progress_callback)
 
-    # ---- 澎湃新闻 ----
-    def _crawl_thepaper(self, count: int, progress_cb=None) -> list[dict]:
-        articles = []
+    def _crawl_source(
+        self,
+        source: str,
+        list_url: str,
+        count: int,
+        list_parser,
+        detail_parser,
+        progress_cb=None,
+    ) -> list[dict]:
         try:
-            soup = self._get_soup("https://www.thepaper.cn/")
-            links = soup.select("a[href*='newsDetail_forward']")
-            seen = set()
-            urls = []
-            for a in links:
-                href = a.get("href", "")
-                if href and href not in seen:
-                    seen.add(href)
-                    title = a.get_text(strip=True)
-                    if title and len(title) > 4:
-                        full_url = href if href.startswith("http") else f"https://www.thepaper.cn/{href}"
-                        urls.append((title, full_url))
-                if len(urls) >= count:
-                    break
-
-            for i, (title, url) in enumerate(urls):
-                try:
-                    detail = self._parse_thepaper_detail(url)
-                    detail["title"] = title
-                    detail["source"] = "澎湃新闻"
-                    detail["url"] = url
-                    articles.append(detail)
-                except Exception as e:
-                    msg = f"爬取澎湃新闻详情失败: {url} - {e}"
-                    log.warning(msg)
-                    self._notify_progress(progress_cb, i + 1, len(urls), msg)
-                else:
-                    self._notify_progress(progress_cb, i + 1, len(urls))
-                time.sleep(random.uniform(0.5, 1.5))
-        except Exception as e:
-            msg = f"爬取澎湃新闻列表失败: {e}"
+            soup = self._get_soup(list_url)
+            urls = list_parser(soup, count)
+        except NetworkFetchError as e:
+            msg = f"爬取{source}列表失败: {e}"
             log.warning(msg)
             self._notify_progress(progress_cb, 0, count, msg)
+            return []
+        except Exception as e:
+            msg = f"解析{source}列表失败: {e}"
+            log.warning(msg)
+            self._notify_progress(progress_cb, 0, count, msg)
+            return []
+
+        articles = []
+        for i, (title, url) in enumerate(urls):
+            try:
+                detail = detail_parser(url)
+                detail["title"] = title
+                detail["source"] = source
+                detail["url"] = url
+                articles.append(detail)
+            except NetworkFetchError as e:
+                msg = f"爬取{source}详情失败: {url} - {e}"
+                log.warning(msg)
+                self._notify_progress(progress_cb, i + 1, len(urls), msg)
+            except Exception as e:
+                error = ArticleParseError(f"{url} - {e}")
+                msg = f"解析{source}详情失败: {error}"
+                log.warning(msg)
+                self._notify_progress(progress_cb, i + 1, len(urls), msg)
+            else:
+                self._notify_progress(progress_cb, i + 1, len(urls))
+            time.sleep(random.uniform(0.5, 1.5))
         return articles
+
+    @staticmethod
+    def _unique_links(nodes, count: int, min_title_len: int, url_builder, href_filter=None) -> list[tuple[str, str]]:
+        seen = set()
+        urls = []
+        for a in nodes:
+            href = a.get("href", "")
+            if not href or href in seen:
+                continue
+            if href_filter and not href_filter(href):
+                continue
+            seen.add(href)
+            title = a.get_text(strip=True)
+            if title and len(title) > min_title_len:
+                urls.append((title, url_builder(href)))
+            if len(urls) >= count:
+                break
+        return urls
+
+    # ---- 澎湃新闻 ----
+    def _crawl_thepaper(self, count: int, progress_cb=None) -> list[dict]:
+        return self._crawl_source(
+            "澎湃新闻",
+            "https://www.thepaper.cn/",
+            count,
+            self._parse_thepaper_list,
+            self._parse_thepaper_detail,
+            progress_cb,
+        )
+
+    def _parse_thepaper_list(self, soup: BeautifulSoup, count: int) -> list[tuple[str, str]]:
+        links = soup.select("a[href*='newsDetail_forward']")
+        return self._unique_links(
+            links,
+            count,
+            4,
+            lambda href: href if href.startswith("http") else f"https://www.thepaper.cn/{href}",
+        )
 
     def _parse_thepaper_detail(self, url: str) -> dict:
         soup = self._get_soup(url)
@@ -125,41 +188,18 @@ class NewsSpider:
 
     # ---- 新浪新闻 ----
     def _crawl_sina(self, count: int, progress_cb=None) -> list[dict]:
-        articles = []
-        try:
-            soup = self._get_soup("https://news.sina.com.cn/")
-            links = soup.select("a[href*='sina.com.cn']")
-            seen = set()
-            urls = []
-            for a in links:
-                href = a.get("href", "")
-                if href and "doc-" in href and href not in seen:
-                    seen.add(href)
-                    title = a.get_text(strip=True)
-                    if title and len(title) > 4:
-                        urls.append((title, href))
-                if len(urls) >= count:
-                    break
+        return self._crawl_source(
+            "新浪新闻",
+            "https://news.sina.com.cn/",
+            count,
+            self._parse_sina_list,
+            self._parse_sina_detail,
+            progress_cb,
+        )
 
-            for i, (title, url) in enumerate(urls):
-                try:
-                    detail = self._parse_sina_detail(url)
-                    detail["title"] = title
-                    detail["source"] = "新浪新闻"
-                    detail["url"] = url
-                    articles.append(detail)
-                except Exception as e:
-                    msg = f"爬取新浪新闻详情失败: {url} - {e}"
-                    log.warning(msg)
-                    self._notify_progress(progress_cb, i + 1, len(urls), msg)
-                else:
-                    self._notify_progress(progress_cb, i + 1, len(urls))
-                time.sleep(random.uniform(0.5, 1.5))
-        except Exception as e:
-            msg = f"爬取新浪新闻列表失败: {e}"
-            log.warning(msg)
-            self._notify_progress(progress_cb, 0, count, msg)
-        return articles
+    def _parse_sina_list(self, soup: BeautifulSoup, count: int) -> list[tuple[str, str]]:
+        links = soup.select("a[href*='sina.com.cn']")
+        return self._unique_links(links, count, 4, lambda href: href, lambda href: "doc-" in href)
 
     def _parse_sina_detail(self, url: str) -> dict:
         soup = self._get_soup(url)
@@ -173,42 +213,23 @@ class NewsSpider:
 
     # ---- 36氪 ----
     def _crawl_36kr(self, count: int, progress_cb=None) -> list[dict]:
-        articles = []
-        try:
-            soup = self._get_soup("https://36kr.com/newsflashes")
-            items = soup.select("a.article-item-title") or soup.select("a[href*='/newsflashes/']")
-            seen = set()
-            urls = []
-            for a in items:
-                href = a.get("href", "")
-                if href and href not in seen:
-                    seen.add(href)
-                    title = a.get_text(strip=True)
-                    if title and len(title) > 2:
-                        full_url = href if href.startswith("http") else f"https://36kr.com{href}"
-                        urls.append((title, full_url))
-                if len(urls) >= count:
-                    break
+        return self._crawl_source(
+            "36氪",
+            "https://36kr.com/newsflashes",
+            count,
+            self._parse_36kr_list,
+            self._parse_36kr_detail,
+            progress_cb,
+        )
 
-            for i, (title, url) in enumerate(urls):
-                try:
-                    detail = self._parse_36kr_detail(url)
-                    detail["title"] = title
-                    detail["source"] = "36氪"
-                    detail["url"] = url
-                    articles.append(detail)
-                except Exception as e:
-                    msg = f"爬取36氪详情失败: {url} - {e}"
-                    log.warning(msg)
-                    self._notify_progress(progress_cb, i + 1, len(urls), msg)
-                else:
-                    self._notify_progress(progress_cb, i + 1, len(urls))
-                time.sleep(random.uniform(0.5, 1.5))
-        except Exception as e:
-            msg = f"爬取36氪列表失败: {e}"
-            log.warning(msg)
-            self._notify_progress(progress_cb, 0, count, msg)
-        return articles
+    def _parse_36kr_list(self, soup: BeautifulSoup, count: int) -> list[tuple[str, str]]:
+        items = soup.select("a.article-item-title") or soup.select("a[href*='/newsflashes/']")
+        return self._unique_links(
+            items,
+            count,
+            2,
+            lambda href: href if href.startswith("http") else f"https://36kr.com{href}",
+        )
 
     def _parse_36kr_detail(self, url: str) -> dict:
         soup = self._get_soup(url)
@@ -222,42 +243,23 @@ class NewsSpider:
 
     # ---- 百度百家号 ----
     def _crawl_baidu(self, count: int, progress_cb=None) -> list[dict]:
-        articles = []
-        try:
-            soup = self._get_soup("https://baijiahao.baidu.com/u?app_id=1586447938468457")
-            links = soup.select("a[href*='baijiahao.baidu.com/s']")
-            seen = set()
-            urls = []
-            for a in links:
-                href = a.get("href", "")
-                if href and href not in seen:
-                    seen.add(href)
-                    title = a.get_text(strip=True)
-                    if title and len(title) > 4:
-                        full_url = href if href.startswith("http") else f"https://baijiahao.baidu.com{href}"
-                        urls.append((title, full_url))
-                if len(urls) >= count:
-                    break
+        return self._crawl_source(
+            "百度百家号",
+            "https://baijiahao.baidu.com/u?app_id=1586447938468457",
+            count,
+            self._parse_baidu_list,
+            self._parse_baidu_detail,
+            progress_cb,
+        )
 
-            for i, (title, url) in enumerate(urls):
-                try:
-                    detail = self._parse_baidu_detail(url)
-                    detail["title"] = title
-                    detail["source"] = "百度百家号"
-                    detail["url"] = url
-                    articles.append(detail)
-                except Exception as e:
-                    msg = f"爬取百度百家号详情失败: {url} - {e}"
-                    log.warning(msg)
-                    self._notify_progress(progress_cb, i + 1, len(urls), msg)
-                else:
-                    self._notify_progress(progress_cb, i + 1, len(urls))
-                time.sleep(random.uniform(0.5, 1.5))
-        except Exception as e:
-            msg = f"爬取百度百家号列表失败: {e}"
-            log.warning(msg)
-            self._notify_progress(progress_cb, 0, count, msg)
-        return articles
+    def _parse_baidu_list(self, soup: BeautifulSoup, count: int) -> list[tuple[str, str]]:
+        links = soup.select("a[href*='baijiahao.baidu.com/s']")
+        return self._unique_links(
+            links,
+            count,
+            4,
+            lambda href: href if href.startswith("http") else f"https://baijiahao.baidu.com{href}",
+        )
 
     def _parse_baidu_detail(self, url: str) -> dict:
         soup = self._get_soup(url)

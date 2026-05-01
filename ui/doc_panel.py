@@ -6,42 +6,16 @@ from PyQt6.QtWidgets import (
     QLineEdit, QLabel, QFileDialog, QListWidget, QSplitter, QMessageBox,
     QGroupBox, QProgressBar, QFrame
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt
 from core.doc_commander import DocCommander
 from core.document_parser import DocumentParser
 from db.database import DocumentDAO
 from config import UPLOAD_DIR
 from utils.file_utils import safe_copy
+from ui.task_runner import TaskWorker
 from logger import get_logger
 
 log = get_logger("ui.doc_panel")
-
-
-class CommandWorker(QThread):
-    finished = pyqtSignal(dict)
-    error = pyqtSignal(str)
-
-    def __init__(self, commander, doc_path, doc_info, command_text):
-        super().__init__()
-        self.commander = commander
-        self.doc_path = doc_path
-        self.doc_info = doc_info
-        self.command_text = command_text
-
-    def run(self):
-        loop = asyncio.new_event_loop()
-        try:
-            parsed = loop.run_until_complete(self.commander.parse_command(self.command_text, self.doc_info))
-            if "error" in parsed:
-                self.error.emit(parsed["error"])
-                return
-            result = self.commander.execute(self.doc_path, parsed)
-            result["parsed_command"] = parsed
-            self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 class DocPanel(QWidget):
@@ -150,10 +124,25 @@ class DocPanel(QWidget):
         self.progress.setRange(0, 0)
         doc_info = f"文件名: {self.current_doc.filename}, 类型: {self.current_doc.file_type}"
 
-        self.worker = CommandWorker(self.commander, self.current_doc.file_path, doc_info, cmd)
-        self.worker.finished.connect(self._on_command_done)
-        self.worker.error.connect(self._on_command_error)
+        self.worker = TaskWorker(
+            lambda: self._run_command_task(self.current_doc.file_path, doc_info, cmd),
+            error_prefix="document command",
+        )
+        self.worker.succeeded.connect(self._on_command_done)
+        self.worker.failed.connect(self._on_command_error)
         self.worker.start()
+
+    def _run_command_task(self, doc_path: str, doc_info: str, command_text: str) -> dict:
+        loop = asyncio.new_event_loop()
+        try:
+            parsed = loop.run_until_complete(self.commander.parse_command(command_text, doc_info))
+            if "error" in parsed:
+                raise RuntimeError(parsed["error"])
+            result = self.commander.execute(doc_path, parsed)
+            result["parsed_command"] = parsed
+            return result
+        finally:
+            loop.close()
 
     def _on_command_done(self, result):
         self.btn_exec.setEnabled(True)

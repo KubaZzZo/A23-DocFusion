@@ -1,16 +1,29 @@
 """文档解析器 - 支持 docx/md/xlsx/txt/pdf/image 格式"""
 from pathlib import Path
 from datetime import datetime
+from typing import Callable
 from config import OCR_CONFIG
 from logger import get_logger
 
 log = get_logger("core.parser")
 
 
+class ParserAdapter:
+    """Small adapter wrapper for one document format family."""
+
+    def __init__(self, suffixes: set[str], parse_func: Callable[[Path], str]):
+        self.suffixes = suffixes
+        self.parse_func = parse_func
+
+    def parse(self, path: Path) -> str:
+        return self.parse_func(path)
+
+
 class DocumentParser:
     IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".bmp"}
     SUPPORTED_TYPES = {".docx", ".md", ".xlsx", ".txt", ".pdf"} | IMAGE_TYPES
     _CACHE: dict[tuple[str, float, int], dict] = {}
+    _ADAPTERS: dict[str, ParserAdapter] = {}
 
     @staticmethod
     def parse(file_path: str) -> dict:
@@ -44,20 +57,8 @@ class DocumentParser:
         }
 
         try:
-            if suffix == ".docx":
-                text = DocumentParser._parse_docx(path)
-            elif suffix == ".xlsx":
-                text = DocumentParser._parse_xlsx(path)
-            elif suffix == ".pdf":
-                text = DocumentParser._parse_pdf(path)
-            elif suffix in DocumentParser.IMAGE_TYPES:
-                text = DocumentParser._parse_image(path)
-            elif suffix == ".md":
-                text = DocumentParser._parse_md(path)
-            elif suffix == ".txt":
-                text = DocumentParser._parse_txt(path)
-            else:
-                text = ""
+            adapter = DocumentParser._get_adapter(suffix)
+            text = adapter.parse(path)
         except Exception as e:
             log.error(f"解析文件失败 {path.name}: {e}")
             raise
@@ -69,6 +70,30 @@ class DocumentParser:
             oldest_key = next(iter(DocumentParser._CACHE))
             DocumentParser._CACHE.pop(oldest_key, None)
         return result
+
+    @classmethod
+    def register_adapter(cls, adapter: ParserAdapter):
+        for suffix in adapter.suffixes:
+            cls._ADAPTERS[suffix] = adapter
+        cls.SUPPORTED_TYPES = set(cls._ADAPTERS)
+
+    @classmethod
+    def _get_adapter(cls, suffix: str) -> ParserAdapter:
+        if not cls._ADAPTERS:
+            cls._register_default_adapters()
+        adapter = cls._ADAPTERS.get(suffix)
+        if not adapter:
+            raise ValueError(f"不支持的文件格式: {suffix}")
+        return adapter
+
+    @classmethod
+    def _register_default_adapters(cls):
+        cls.register_adapter(ParserAdapter({".txt"}, lambda path: cls._parse_txt(path)))
+        cls.register_adapter(ParserAdapter({".md"}, lambda path: cls._parse_md(path)))
+        cls.register_adapter(ParserAdapter({".docx"}, lambda path: cls._parse_docx(path)))
+        cls.register_adapter(ParserAdapter({".xlsx"}, lambda path: cls._parse_xlsx(path)))
+        cls.register_adapter(ParserAdapter({".pdf"}, lambda path: cls._parse_pdf(path)))
+        cls.register_adapter(ParserAdapter(cls.IMAGE_TYPES, lambda path: cls._parse_image(path)))
 
     @staticmethod
     def _parse_md(path: Path) -> str:
