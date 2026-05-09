@@ -77,13 +77,17 @@ class TestDocumentParser:
         assert second["text"] == "cache me"
         assert calls["count"] == 1
 
+    def test_parser_uses_functools_lru_cache(self):
+        assert hasattr(DocumentParser._do_parse, "cache_info")
+        assert DocumentParser._do_parse.cache_info().maxsize == 64
+
     def test_can_register_parser_adapter_for_new_format(self):
         path = TEST_DIR / "adapter.custom"
         path.write_text("adapter content", encoding="utf-8")
 
         old_adapters = dict(DocumentParser._ADAPTERS)
         old_supported = set(DocumentParser.SUPPORTED_TYPES)
-        DocumentParser._CACHE.clear()
+        DocumentParser.clear_cache()
         try:
             DocumentParser.register_adapter(
                 ParserAdapter({".custom"}, lambda p: f"parsed: {p.read_text(encoding='utf-8')}")
@@ -96,5 +100,43 @@ class TestDocumentParser:
         finally:
             DocumentParser._ADAPTERS = old_adapters
             DocumentParser.SUPPORTED_TYPES = old_supported
-            DocumentParser._CACHE.clear()
+            DocumentParser.clear_cache()
             path.unlink(missing_ok=True)
+
+    def test_register_adapter_keeps_existing_supported_types(self):
+        old_adapters = dict(DocumentParser._ADAPTERS)
+        old_supported = set(DocumentParser.SUPPORTED_TYPES)
+        try:
+            DocumentParser.register_adapter(ParserAdapter({".extra"}, lambda p: "extra"))
+
+            assert ".txt" in DocumentParser.SUPPORTED_TYPES
+            assert ".extra" in DocumentParser.SUPPORTED_TYPES
+        finally:
+            DocumentParser._ADAPTERS = old_adapters
+            DocumentParser.SUPPORTED_TYPES = old_supported
+            DocumentParser.clear_cache()
+
+    def test_lru_cache_evicts_least_recently_used_parse_result(self, monkeypatch):
+        paths = []
+        for index in range(65):
+            path = TEST_DIR / f"lru_{index}.txt"
+            path.write_text(f"value-{index}", encoding="utf-8")
+            paths.append(path)
+        calls = {"count": 0}
+
+        def fake_parse_txt(p):
+            calls["count"] += 1
+            return p.read_text(encoding="utf-8")
+
+        monkeypatch.setattr(DocumentParser, "_parse_txt", staticmethod(fake_parse_txt), raising=False)
+        DocumentParser.clear_cache()
+        try:
+            for path in paths:
+                DocumentParser.parse(str(path))
+            DocumentParser.parse(str(paths[0]))
+
+            assert calls["count"] == 66
+        finally:
+            DocumentParser.clear_cache()
+            for path in paths:
+                path.unlink(missing_ok=True)

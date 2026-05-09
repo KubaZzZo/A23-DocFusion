@@ -3,6 +3,7 @@ import csv
 import io
 from dataclasses import dataclass
 
+from core.spreadsheet_safety import escape_formula_value
 from core.workflow_errors import WorkflowValidationError
 from db.database import EntityDAO
 
@@ -15,8 +16,14 @@ class EntityExport:
 
 
 class EntityWorkflow:
-    def list_entities(self, doc_id: int | None = None, keyword: str | None = None) -> list[dict]:
-        return [self._serialize_entity(entity) for entity in self._query_entities(doc_id, keyword)]
+    def list_entities(
+        self,
+        doc_id: int | None = None,
+        keyword: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
+        return [self._serialize_entity(entity) for entity in self._query_entities(doc_id, keyword, limit, offset)]
 
     def export_entities(self, fmt: str = "csv", doc_id: int | None = None, keyword: str | None = None) -> EntityExport:
         rows = [
@@ -35,7 +42,7 @@ class EntityWorkflow:
             buffer = io.StringIO()
             writer = csv.DictWriter(buffer, fieldnames=["id", "type", "value", "context", "confidence"])
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows([self._escape_export_row(row) for row in rows])
             return EntityExport(
                 content=buffer.getvalue().encode("utf-8-sig"),
                 media_type="text/csv; charset=utf-8",
@@ -51,7 +58,7 @@ class EntityWorkflow:
             headers = ["id", "type", "value", "context", "confidence"]
             sheet.append(headers)
             for row in rows:
-                sheet.append([row[h] for h in headers])
+                sheet.append([escape_formula_value(row[h]) for h in headers])
             buffer = io.BytesIO()
             workbook.save(buffer)
             return EntityExport(
@@ -63,12 +70,12 @@ class EntityWorkflow:
         raise WorkflowValidationError("不支持的导出格式，请使用 csv 或 xlsx")
 
     @staticmethod
-    def _query_entities(doc_id: int | None, keyword: str | None):
+    def _query_entities(doc_id: int | None, keyword: str | None, limit: int | None = None, offset: int = 0):
         if keyword:
-            return EntityDAO.search(keyword)
+            return EntityDAO.search(keyword, limit=limit, offset=offset)
         if doc_id:
-            return EntityDAO.get_by_document(doc_id)
-        return EntityDAO.get_all()
+            return EntityDAO.get_by_document(doc_id, limit=limit, offset=offset)
+        return EntityDAO.get_all(limit=limit, offset=offset)
 
     @staticmethod
     def _serialize_entity(entity) -> dict:
@@ -79,6 +86,10 @@ class EntityWorkflow:
             "context": entity.context,
             "confidence": entity.confidence,
         }
+
+    @staticmethod
+    def _escape_export_row(row: dict) -> dict:
+        return {key: escape_formula_value(value) for key, value in row.items()}
 
 
 __all__ = ["EntityWorkflow", "EntityExport"]

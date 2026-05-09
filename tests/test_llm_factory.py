@@ -36,3 +36,18 @@ def test_get_llm_with_explicit_cloud_provider_does_not_mutate_runtime_config():
     assert isinstance(client, CloudClient)
     assert client.profile.vendor == "deepseek"
     assert LLM_CONFIG["openai"]["vendor"] == original_vendor
+
+
+def test_get_llm_decodes_api_key_ref_without_storing_plaintext(monkeypatch):
+    monkeypatch.setitem(LLM_CONFIG, "provider", "openai")
+    monkeypatch.setitem(
+        LLM_CONFIG,
+        "openai",
+        {"vendor": "openai", "api_key": "", "api_key_ref": "encrypted", "base_url": "https://api.example.com/v1", "model": "m"},
+    )
+    monkeypatch.setattr("llm.factory.decode_key", lambda value: "plain-secret")
+
+    client = get_llm("openai")
+
+    assert client.profile.api_key == "plain-secret"
+    assert LLM_CONFIG["openai"]["api_key"] == ""

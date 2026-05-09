@@ -1,7 +1,7 @@
 """数据库DAO测试"""
 import pytest
 from db.models import init_db, Base, engine
-from db.database import DocumentDAO, EntityDAO, TemplateDAO, CrawledArticleDAO
+from db.database import DocumentDAO, EntityDAO, TemplateDAO, FillTaskDAO, CrawledArticleDAO
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +78,13 @@ class TestEntityDAO:
         assert len(results) == 1
         assert results[0].entity_value == "王五"
 
+    def test_search_blank_keyword_returns_no_rows(self):
+        doc = DocumentDAO.create("test.txt", "txt", "/tmp/test.txt")
+        EntityDAO.create_batch(doc.id, [{"type": "person", "value": "Alice", "confidence": 0.9}])
+
+        assert EntityDAO.search("") == []
+        assert EntityDAO.search("   ") == []
+
     def test_get_cross_document_entities(self):
         doc1 = DocumentDAO.create("doc1.txt", "txt", "/tmp/doc1.txt")
         doc2 = DocumentDAO.create("doc2.txt", "txt", "/tmp/doc2.txt")
@@ -100,6 +107,16 @@ class TestEntityDAO:
         assert results[0]["doc_count"] == 2
         assert set(results[0]["documents"]) == {"doc1.txt", "doc2.txt"}
 
+    def test_get_cross_document_entities_applies_limit_in_sql(self):
+        docs = [DocumentDAO.create(f"doc{i}.txt", "txt", f"/tmp/doc{i}.txt") for i in range(3)]
+        for idx, value in enumerate(["A", "B", "C"]):
+            EntityDAO.create_batch(docs[0].id, [{"type": "person", "value": value, "confidence": 0.9}])
+            EntityDAO.create_batch(docs[1].id, [{"type": "person", "value": value, "confidence": 0.8}])
+
+        results = EntityDAO.get_cross_document_entities(limit=2)
+
+        assert len(results) == 2
+
 
 class TestTemplateDAO:
     def test_create_and_get(self):
@@ -113,6 +130,20 @@ class TestTemplateDAO:
         TemplateDAO.create("b.xlsx", "/tmp/b.xlsx")
         templates = TemplateDAO.get_all()
         assert len(templates) >= 2
+
+
+class TestFillTaskDAO:
+    def test_get_all_and_list_by_status(self):
+        tpl = TemplateDAO.create("tpl.xlsx", "/tmp/tpl.xlsx", "{}")
+        first = FillTaskDAO.create(tpl.id)
+        second = FillTaskDAO.create(tpl.id)
+        FillTaskDAO.update_status(second.id, "completed")
+
+        all_tasks = FillTaskDAO.get_all()
+        completed = FillTaskDAO.list_by_status("completed")
+
+        assert [task.id for task in all_tasks] == [second.id, first.id]
+        assert [task.id for task in completed] == [second.id]
 
 
 class TestCrawledArticleDAO:

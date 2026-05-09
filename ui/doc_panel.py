@@ -110,6 +110,9 @@ class DocPanel(QWidget):
         self._log(f"已加载文档: {doc.filename}")
 
     def _execute_command(self):
+        if getattr(self, "worker", None) and self.worker.isRunning():
+            return
+
         cmd = self.input_cmd.text().strip()
         if not cmd:
             return

@@ -6,11 +6,19 @@ from ui import dashboard_view_model
 
 class FakeDocumentDAO:
     @staticmethod
-    def get_all():
+    def get_recent(limit=20):
         return [
             SimpleNamespace(filename="a.docx", file_type="docx", raw_text="x"),
             SimpleNamespace(filename="b.txt", file_type="txt", raw_text=None),
         ]
+
+    @staticmethod
+    def count_parsed():
+        return 1
+
+    @staticmethod
+    def count_by_type():
+        return {"docx": 1, "txt": 1}
 
 
 class FakeEntityDAO:
@@ -29,14 +37,22 @@ class FakeEntityDAO:
 
 class FakeTemplateDAO:
     @staticmethod
+    def count():
+        return 3
+
+    @staticmethod
     def get_all():
-        return [1, 2, 3]
+        raise AssertionError("dashboard should not load all templates")
 
 
 class FakeCrawledArticleDAO:
     @staticmethod
+    def count():
+        return 2
+
+    @staticmethod
     def get_all():
-        return [1, 2]
+        raise AssertionError("dashboard should not load all articles")
 
 
 def test_build_dashboard_snapshot_collects_all_display_data(monkeypatch):
@@ -60,4 +76,5 @@ def test_dashboard_panel_uses_view_model_module():
     source = open("ui/dashboard_panel.py", encoding="utf-8").read()
 
     assert "from ui.dashboard_view_model import build_dashboard_snapshot" in source
-    assert "self._render_snapshot(snapshot)" in source
+    assert "self.refresh_worker = TaskWorker(build_dashboard_snapshot" in source
+    assert "self.refresh_worker.succeeded.connect(self._render_snapshot)" in source

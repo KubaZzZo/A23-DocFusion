@@ -6,6 +6,8 @@ from pathlib import Path
 from datetime import datetime
 
 from core.template_filler import TemplateFiller
+from core.file_signature import validate_file_signature
+from core.upload_limits import validate_upload_size
 from core.workflow_errors import WorkflowNotFoundError
 from db.database import EntityDAO, TemplateDAO, FillTaskDAO
 from config import OUTPUT_DIR, UPLOAD_DIR
@@ -21,6 +23,8 @@ class TemplateWorkflow:
         self.upload_dir.mkdir(exist_ok=True)
 
     async def upload_template(self, filename: str, content: bytes) -> dict:
+        validate_upload_size(content)
+        validate_file_signature(filename, content)
         with FileTransaction() as tx:
             save_path = tx.write_bytes(self._next_upload_path(filename), content)
             filler = TemplateFiller()
@@ -75,14 +79,14 @@ class TemplateWorkflow:
         """Synchronous wrapper for FastAPI BackgroundTasks."""
         asyncio.run(self.do_fill(task_id, template_path, entities))
 
-    def fill_confirmed_map(self, template_path: str, fill_map: dict) -> dict:
+    async def fill_confirmed_map(self, template_path: str, fill_map: dict) -> dict:
         path = Path(template_path)
         suffix = path.suffix.lower()
         if suffix not in {".xlsx", ".docx"}:
             raise ValueError(f"不支持的模板格式: {suffix}")
 
         filler = TemplateFiller()
-        analysis = asyncio.run(filler.analyze_template(template_path))
+        analysis = await filler.analyze_template(template_path)
         fields = analysis.get("fields", [])
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -96,9 +100,12 @@ class TemplateWorkflow:
         elif suffix == ".docx":
             filler._fill_docx(str(output_path), fields, fill_map)
 
-        filled_count = sum(1 for field in fields if field["field_name"] in fill_map)
-        total_count = len(fields)
-        unmatched_names = [field["field_name"] for field in fields if field["field_name"] not in fill_map]
+        field_names = analysis.get("field_names", [])
+        filled_count = sum(1 for field_name in field_names if field_name in fill_map)
+        total_count = len(field_names)
+        filled_cells = sum(1 for field in fields if field["field_name"] in fill_map)
+        total_cells = len(fields)
+        unmatched_names = [field_name for field_name in field_names if field_name not in fill_map]
 
         return {
             "success": True,
@@ -106,6 +113,9 @@ class TemplateWorkflow:
             "filled": filled_count,
             "total": total_count,
             "accuracy": filled_count / total_count if total_count else 0,
+            "filled_cells": filled_cells,
+            "total_cells": total_cells,
+            "message": f"{filled_count}/{total_count} fields matched, written to {filled_cells} cells",
             "unmatched": unmatched_names,
         }
 

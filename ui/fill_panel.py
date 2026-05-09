@@ -30,6 +30,8 @@ from ui.components import EmptyState, apply_panel_density, mark_secondary, set_b
 from ui.fill_confirm_dialog import FillConfirmDialog
 from ui.task_runner import TaskWorker
 
+ENTITY_TABLE_LIMIT = 200
+
 
 class FillPanel(QWidget):
     def __init__(self):
@@ -139,35 +141,47 @@ class FillPanel(QWidget):
         if not path:
             return
 
+        self.btn_open_tpl.setEnabled(False)
+        self.lbl_tpl.setText("分析模板中...")
+        self.tpl_worker = TaskWorker(
+            lambda: self._run_open_template_task(path),
+            error_prefix="template open",
+        )
+        self.tpl_worker.succeeded.connect(self._on_template_opened)
+        self.tpl_worker.failed.connect(self._on_template_open_error)
+        self.tpl_worker.start()
+
+    @staticmethod
+    def _run_open_template_task(path: str) -> dict:
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.new_event_loop()
-            try:
-                template = loop.run_until_complete(
-                    self.template_workflow.upload_template(Path(path).name, Path(path).read_bytes())
-                )
-            finally:
-                loop.close()
+            template_workflow = TemplateWorkflow()
+            template = loop.run_until_complete(
+                template_workflow.upload_template(Path(path).name, Path(path).read_bytes())
+            )
+            return {"path": template["path"], "filename": Path(path).name, "fields": template.get("fields", {})}
+        finally:
+            loop.close()
 
-            self.current_template_path = template["path"]
-            self.lbl_tpl.setText(Path(path).name)
+    def _on_template_opened(self, result: dict):
+        self.current_template_path = result["path"]
+        self.lbl_tpl.setText(result["filename"])
+        analysis = result.get("fields", {})
 
-            loop = asyncio.new_event_loop()
-            try:
-                filler = TemplateFiller()
-                analysis = loop.run_until_complete(filler.analyze_template(self.current_template_path))
-            finally:
-                loop.close()
+        self.fields_list.clear()
+        for field_name in analysis.get("field_names", []):
+            self.fields_list.addItem(field_name)
 
-            self.fields_list.clear()
-            for field_name in analysis.get("field_names", []):
-                self.fields_list.addItem(field_name)
+        self.btn_fill.setEnabled(True)
+        self.btn_open_tpl.setEnabled(True)
 
-            self.btn_fill.setEnabled(True)
-        except Exception as e:
-            QMessageBox.critical(self, "模板分析失败", str(e))
+    def _on_template_open_error(self, msg: str):
+        self.btn_open_tpl.setEnabled(True)
+        self.lbl_tpl.setText("未选择模板")
+        QMessageBox.critical(self, "模板分析失败", msg)
 
     def _refresh_entities(self):
-        entities = EntityDAO.get_all()
+        entities = EntityDAO.get_all(limit=ENTITY_TABLE_LIMIT)
         self.entity_table.setRowCount(len(entities))
         for i, e in enumerate(entities):
             self.entity_table.setItem(i, 0, QTableWidgetItem(e.entity_type))
@@ -239,26 +253,33 @@ class FillPanel(QWidget):
             self.lbl_result_path.setText("")
             return
 
-        try:
-            result = self.template_workflow.fill_confirmed_map(self.current_template_path, fill_map)
-            filled_count = result["filled"]
-            total_count = result["total"]
+        set_busy_state(self.btn_fill, self.progress, True, busy_text="填写中...")
+        self.fill_worker = TaskWorker(
+            lambda: asyncio.run(self.template_workflow.fill_confirmed_map(self.current_template_path, fill_map)),
+            error_prefix="template confirmed fill",
+        )
+        self.fill_worker.succeeded.connect(self._on_confirmed_fill_done)
+        self.fill_worker.failed.connect(self._on_fill_error)
+        self.fill_worker.start()
 
-            self.result_path = result["output_path"]
-            accuracy_str = f"{result['accuracy']:.1%}" if total_count > 0 else "N/A"
-            unmatched_names = result.get("unmatched", [])
+    def _on_confirmed_fill_done(self, result: dict):
+        set_busy_state(self.btn_fill, self.progress, False, idle_text="开始自动填写")
+        filled_count = result["filled"]
+        total_count = result["total"]
 
-            self.result_frame.setVisible(True)
-            self.empty_state.setVisible(False)
-            self.lbl_result_title.setText(f"填写完成 - {filled_count}/{total_count} 个字段")
-            detail_parts = [f"准确率: {accuracy_str}"]
-            if unmatched_names:
-                detail_parts.append(f"未填写: {', '.join(unmatched_names)}")
-            self.lbl_result_detail.setText("\n".join(detail_parts))
-            self.lbl_result_path.setText(f"输出文件: {self.result_path}")
-            self.btn_open_result.setEnabled(True)
-        except Exception as e:
-            QMessageBox.critical(self, "填写失败", str(e))
+        self.result_path = result["output_path"]
+        accuracy_str = f"{result['accuracy']:.1%}" if total_count > 0 else "N/A"
+        unmatched_names = result.get("unmatched", [])
+
+        self.result_frame.setVisible(True)
+        self.empty_state.setVisible(False)
+        self.lbl_result_title.setText(f"填写完成 - {filled_count}/{total_count} 个字段")
+        detail_parts = [f"匹配率: {accuracy_str}"]
+        if unmatched_names:
+            detail_parts.append(f"未匹配字段: {', '.join(unmatched_names)}")
+        self.lbl_result_detail.setText("\n".join(detail_parts))
+        self.lbl_result_path.setText(f"输出路径: {self.result_path}")
+        self.btn_open_result.setEnabled(True)
 
     def _on_fill_error(self, msg):
         set_busy_state(self.btn_fill, self.progress, False, idle_text="开始自动填写")

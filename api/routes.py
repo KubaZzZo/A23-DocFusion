@@ -1,8 +1,10 @@
 """FastAPI路由定义"""
 import io
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from api.auth import require_local_bearer_token
+from config import MAX_UPLOAD_SIZE
 from core.article_workflow import ArticleWorkflow
 from core.document_workflow import DocumentWorkflow
 from core.entity_workflow import EntityWorkflow
@@ -12,7 +14,8 @@ from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
 from db.database import FillTaskDAO
 
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(require_local_bearer_token)])
+public_router = APIRouter(prefix="/api")
 document_workflow = DocumentWorkflow()
 entity_workflow = EntityWorkflow()
 template_workflow = TemplateWorkflow()
@@ -30,6 +33,15 @@ class FillRequest(BaseModel):
     document_ids: list[int] = []
 
 
+class PageParams(BaseModel):
+    page: int = Field(default=1, ge=1)
+    limit: int | None = Field(default=None, ge=1, le=200)
+
+    @property
+    def offset(self) -> int:
+        return 0 if self.limit is None else (self.page - 1) * self.limit
+
+
 def _raise_http_error(error: Exception):
     if isinstance(error, WorkflowNotFoundError):
         raise HTTPException(404, str(error))
@@ -38,12 +50,19 @@ def _raise_http_error(error: Exception):
     raise error
 
 
+async def _read_limited_upload(file: UploadFile) -> bytes:
+    content = await file.read(MAX_UPLOAD_SIZE + 1)
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, f"Upload exceeds maximum size of {MAX_UPLOAD_SIZE} bytes")
+    return content
+
+
 # --- 文档相关 ---
 
 @router.get("/documents", tags=["文档管理"], summary="获取文档列表")
-async def list_documents():
+async def list_documents(pagination: PageParams = Depends()):
     """获取所有已上传的文档列表"""
-    return document_workflow.list_documents()
+    return document_workflow.list_documents(limit=pagination.limit, offset=pagination.offset)
 
 
 @router.delete("/documents/{doc_id}", tags=["文档管理"], summary="删除文档")
@@ -59,7 +78,7 @@ async def delete_document(doc_id: int):
 async def upload_document(file: UploadFile = File(...)):
     """上传文档文件，支持 docx/md/xlsx/txt/pdf 格式"""
     try:
-        return document_workflow.upload_document(file.filename, await file.read())
+        return document_workflow.upload_document(file.filename, await _read_limited_upload(file))
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
@@ -94,9 +113,14 @@ async def execute_command(req: CommandRequest):
 # --- 实体查询 ---
 
 @router.get("/entities", tags=["实体提取"], summary="查询实体")
-async def list_entities(doc_id: int = None, keyword: str = None):
+async def list_entities(doc_id: int = None, keyword: str = None, pagination: PageParams = Depends()):
     """查询已提取的实体，支持按文档ID或关键词过滤"""
-    return entity_workflow.list_entities(doc_id=doc_id, keyword=keyword)
+    return entity_workflow.list_entities(
+        doc_id=doc_id,
+        keyword=keyword,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.get("/entities/export", tags=["实体提取"], summary="导出实体数据")
@@ -119,7 +143,7 @@ async def export_entities(fmt: str = "csv", doc_id: int = None, keyword: str = N
 async def upload_template(file: UploadFile = File(...)):
     """上传模板表格文件，自动分析待填写字段"""
     try:
-        return await template_workflow.upload_template(file.filename, await file.read())
+        return await template_workflow.upload_template(file.filename, await _read_limited_upload(file))
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
@@ -150,7 +174,7 @@ async def get_fill_status(task_id: int):
             "result_path": task.result_path, "accuracy": task.accuracy}
 
 
-@router.get("/health", tags=["系统"], summary="健康检查")
+@public_router.get("/health", tags=["系统"], summary="健康检查")
 async def health():
     """检查API服务运行状态"""
     return {"status": "ok"}
@@ -159,9 +183,9 @@ async def health():
 # --- 爬取文章 ---
 
 @router.get("/articles", tags=["新闻爬虫"], summary="获取爬取文章列表")
-async def list_articles():
+async def list_articles(pagination: PageParams = Depends()):
     """获取所有已爬取的文章"""
-    return article_workflow.list_articles()
+    return article_workflow.list_articles(limit=pagination.limit, offset=pagination.offset)
 
 
 @router.get("/articles/{article_id}", tags=["新闻爬虫"], summary="获取文章详情")

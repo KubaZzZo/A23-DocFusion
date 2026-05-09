@@ -18,26 +18,19 @@ class DashboardSnapshot:
 
 
 def build_dashboard_snapshot() -> DashboardSnapshot:
-    docs = DocumentDAO.get_all()
+    docs = DocumentDAO.get_recent(limit=20)
     entity_count = EntityDAO.count()
     type_counts = EntityDAO.count_by_type()
     cross_doc_entities = EntityDAO.get_cross_document_entities()
-    templates = TemplateDAO.get_all()
-    articles = CrawledArticleDAO.get_all()
-
-    doc_type_counts = {}
-    for doc in docs:
-        doc_type = (doc.file_type or "unknown").lower()
-        doc_type_counts[doc_type] = doc_type_counts.get(doc_type, 0) + 1
 
     return DashboardSnapshot(
         docs=docs,
-        recent_docs=docs[:20],
-        parsed_count=sum(1 for doc in docs if doc.raw_text),
+        recent_docs=docs,
+        parsed_count=DocumentDAO.count_parsed(),
         entity_count=entity_count,
         type_counts=type_counts,
         cross_doc_entities=cross_doc_entities,
-        template_count=len(templates),
-        article_count=len(articles),
-        doc_type_counts=doc_type_counts,
+        template_count=TemplateDAO.count(),
+        article_count=CrawledArticleDAO.count(),
+        doc_type_counts=DocumentDAO.count_by_type(),
     )

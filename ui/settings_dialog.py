@@ -128,7 +128,7 @@ class SettingsDialog(QDialog):
         vendor = LLM_CONFIG["openai"].get("vendor", "openai")
         index = self.openai_vendor.findData(vendor)
         self.openai_vendor.setCurrentIndex(index if index >= 0 else self.openai_vendor.findData("custom"))
-        self.openai_key.setText(LLM_CONFIG["openai"]["api_key"])
+        self.openai_key.clear()
         self.openai_url.setText(LLM_CONFIG["openai"]["base_url"])
         self.openai_model.setText(LLM_CONFIG["openai"]["model"])
         self._apply_vendor_preset(self.openai_vendor.currentData(), preserve_values=True)
@@ -181,6 +181,7 @@ class SettingsDialog(QDialog):
         )
         result = ProviderHealthChecker().check_openai_compatible(profile)
         if result.ok:
+            self.openai_key.clear()
             QMessageBox.information(self, "连接成功", _format_provider_health_message(vendor_label, result))
         else:
             QMessageBox.critical(
@@ -190,22 +191,26 @@ class SettingsDialog(QDialog):
             )
 
     def _save(self):
+        api_key = self.openai_key.text().strip()
         LLM_CONFIG["ollama"]["base_url"] = self.ollama_url.text().strip() or "http://localhost:11434"
         LLM_CONFIG["ollama"]["model"] = self.ollama_model.text().strip() or "qwen2.5:7b"
         LLM_CONFIG["openai"]["vendor"] = self.openai_vendor.currentData() or "openai"
-        LLM_CONFIG["openai"]["api_key"] = self.openai_key.text().strip()
+        LLM_CONFIG["openai"]["api_key"] = ""
         LLM_CONFIG["openai"]["base_url"] = self.openai_url.text().strip() or "https://api.openai.com/v1"
         LLM_CONFIG["openai"]["model"] = self.openai_model.text().strip() or "gpt-4o-mini"
+        if api_key:
+            LLM_CONFIG["openai"]["api_key_ref"] = _encode_key(api_key)
 
         settings = {
             "provider": LLM_CONFIG["provider"],
             "ollama_url": LLM_CONFIG["ollama"]["base_url"],
             "ollama_model": LLM_CONFIG["ollama"]["model"],
             "openai_vendor": LLM_CONFIG["openai"]["vendor"],
-            "openai_key": _encode_key(LLM_CONFIG["openai"]["api_key"]),
+            "openai_key": LLM_CONFIG["openai"].get("api_key_ref", ""),
             "openai_url": LLM_CONFIG["openai"]["base_url"],
             "openai_model": LLM_CONFIG["openai"]["model"],
         }
         save_settings(settings)
+        self.openai_key.clear()
         QMessageBox.information(self, "保存成功", "设置已保存并生效")
         self.accept()

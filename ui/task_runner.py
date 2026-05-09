@@ -9,7 +9,11 @@ log = get_logger("ui.task_runner")
 
 
 class TaskWorker(QThread):
-    """Run a callable in a QThread and emit normalized success/error signals."""
+    """Run a callable in a QThread and emit normalized success/error signals.
+
+    Automatically calls deleteLater() after finishing so callers don't
+    accumulate orphaned QThread objects.
+    """
 
     succeeded = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -18,6 +22,7 @@ class TaskWorker(QThread):
         super().__init__()
         self._task = task
         self._error_prefix = error_prefix
+        self.finished.connect(self.deleteLater)
 
     def run(self):
         try:
@@ -28,7 +33,11 @@ class TaskWorker(QThread):
 
 
 class ProgressTaskWorker(QThread):
-    """Run a progress-reporting callable in a QThread."""
+    """Run a progress-reporting callable in a QThread.
+
+    Automatically calls deleteLater() after finishing so callers don't
+    accumulate orphaned QThread objects.
+    """
 
     progress = pyqtSignal(object)
     succeeded = pyqtSignal(object)
@@ -38,6 +47,7 @@ class ProgressTaskWorker(QThread):
         super().__init__()
         self._task = task
         self._error_prefix = error_prefix
+        self.finished.connect(self.deleteLater)
 
     def _emit_progress(self, event: object):
         self.progress.emit(event)

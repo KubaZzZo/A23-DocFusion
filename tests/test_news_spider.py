@@ -1,4 +1,6 @@
 """News spider error handling tests."""
+from pathlib import Path
+
 import pytest
 from bs4 import BeautifulSoup
 
@@ -7,7 +9,6 @@ from crawler.news_spider import NetworkFetchError, NewsSpider
 
 def test_crawl_source_skips_failed_article_and_continues(monkeypatch):
     spider = NewsSpider()
-    monkeypatch.setattr("crawler.news_spider.time.sleep", lambda _: None)
     monkeypatch.setattr(spider, "_get_soup", lambda url: BeautifulSoup("<html></html>", "lxml"))
     progress = []
 
@@ -34,7 +35,8 @@ def test_crawl_source_skips_failed_article_and_continues(monkeypatch):
     assert len(articles) == 1
     assert articles[0]["title"] == "第一篇文章"
     assert progress[-1][0] == 2
-    assert "解析测试源详情失败" in progress[-1][2]
+    assert "parse detail failed" in progress[-1][2]
+    assert "http://example.com/bad" in progress[-1][2]
     spider.close()
 
 
@@ -59,6 +61,22 @@ def test_crawl_source_reports_list_network_failure(monkeypatch):
     assert articles == []
     assert progress == [(0, 3, "爬取测试源列表失败: request failed")]
     spider.close()
+
+
+def test_news_spider_disables_automatic_redirects():
+    spider = NewsSpider()
+
+    assert spider.client.follow_redirects is False
+    spider.close()
+
+
+def test_crawl_source_uses_concurrent_detail_fetching():
+    source = Path("crawler/news_spider.py").read_text(encoding="utf-8")
+
+    assert "DETAIL_CONCURRENCY" in source
+    assert "ThreadPoolExecutor" in source
+    assert "as_completed" in source
+    assert "time.sleep(random.uniform" not in source
 
 
 @pytest.mark.parametrize(

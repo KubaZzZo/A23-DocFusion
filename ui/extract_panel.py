@@ -2,6 +2,7 @@
 import asyncio
 import csv
 from pathlib import Path
+from core.spreadsheet_safety import escape_formula_value
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit,
     QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QSplitter,
@@ -270,7 +271,11 @@ class ExtractPanel(QWidget):
         finally:
             loop.close()
 
-    def _start_extract(self):
+    def _start_extract(self, force: bool = False):
+        if getattr(self, "worker", None) and self.worker.isRunning():
+            return
+
+        doc_id = self.current_doc.id if self.current_doc else None
         if not self.current_doc or not self.current_doc.raw_text:
             text = self.txt_content.toPlainText()
             if not text:
@@ -278,7 +283,9 @@ class ExtractPanel(QWidget):
                 return
         else:
             text = self.current_doc.raw_text
-            existing_entities = EntityDAO.get_by_document(self.current_doc.id)
+            existing_entities = []
+            if not force:
+                existing_entities = EntityDAO.get_by_document(self.current_doc.id)
             if existing_entities:
                 entities = [
                     {
@@ -303,7 +310,7 @@ class ExtractPanel(QWidget):
         self.progress.setRange(0, 0)
 
         self.worker = TaskWorker(
-            lambda: self._run_extract_task(text),
+            lambda: self._run_extract_task(text, doc_id),
             error_prefix="entity extraction",
         )
         self.worker.succeeded.connect(self._on_extract_done)
@@ -311,11 +318,13 @@ class ExtractPanel(QWidget):
         self.worker.start()
 
     @staticmethod
-    def _run_extract_task(text: str) -> dict:
+    def _run_extract_task(text: str, doc_id: int | None = None) -> dict:
         loop = asyncio.new_event_loop()
         try:
             extractor = EntityExtractor()
-            return loop.run_until_complete(extractor.extract(text))
+            result = loop.run_until_complete(extractor.extract(text))
+            result["doc_id"] = doc_id
+            return result
         finally:
             loop.close()
 
@@ -339,7 +348,7 @@ class ExtractPanel(QWidget):
         self.entity_table.setRowCount(0)
         self.stats_bar_widget.setVisible(False)
         self._set_export_enabled(False)
-        self._start_extract()
+        self._start_extract(force=True)
 
     def _render_entities(self, entities: list[dict]):
         self._update_stats_bar(entities)
@@ -377,9 +386,10 @@ class ExtractPanel(QWidget):
         self._set_export_enabled(bool(entities))
         summary = result.get("summary", "")
         topic = result.get("topic", "")
+        result_doc_id = result.get("doc_id")
 
-        if self.current_doc and entities:
-            EntityDAO.create_batch(self.current_doc.id, entities)
+        if result_doc_id and entities:
+            EntityDAO.create_batch(result_doc_id, entities)
 
         if topic or summary:
             self.summary_frame.setVisible(True)
@@ -454,7 +464,7 @@ class ExtractPanel(QWidget):
                     extrasaction="ignore",
                 )
                 writer.writeheader()
-                writer.writerows(self.current_entities)
+                writer.writerows(self._escape_export_row(entity) for entity in self.current_entities)
         else:
             path, _ = QFileDialog.getSaveFileName(self, "导出Excel", "entities.xlsx", "Excel文件 (*.xlsx)")
             if not path:
@@ -467,10 +477,14 @@ class ExtractPanel(QWidget):
             headers = ["type", "value", "context", "confidence"]
             sheet.append(headers)
             for entity in self.current_entities:
-                sheet.append([entity.get(h, "") for h in headers])
+                sheet.append([escape_formula_value(entity.get(h, "")) for h in headers])
             workbook.save(path)
 
         QMessageBox.information(self, "导出完成", f"实体数据已导出到:\n{path}")
+
+    @staticmethod
+    def _escape_export_row(entity: dict) -> dict:
+        return {key: escape_formula_value(value) for key, value in entity.items()}
 
     def _update_stats_bar(self, entities: list):
         """更新实体类型统计标签栏"""

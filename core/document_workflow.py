@@ -7,6 +7,8 @@ from core.doc_commander import DocCommander
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
 from config import UPLOAD_DIR
+from core.file_signature import validate_file_signature
+from core.upload_limits import validate_upload_size
 from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
 from utils.file_utils import FileTransaction
 
@@ -16,8 +18,8 @@ class DocumentWorkflow:
         self.upload_dir = Path(upload_dir)
         self.upload_dir.mkdir(exist_ok=True)
 
-    def list_documents(self) -> list[dict]:
-        docs = DocumentDAO.get_all()
+    def list_documents(self, limit: int | None = None, offset: int = 0) -> list[dict]:
+        docs = DocumentDAO.get_all(limit=limit, offset=offset)
         return [
             {
                 "id": d.id,
@@ -39,9 +41,11 @@ class DocumentWorkflow:
         return {"message": f"文档 {doc.filename} 已删除"}
 
     def upload_document(self, filename: str, content: bytes) -> dict:
+        validate_upload_size(content)
         suffix = Path(filename).suffix.lower()
         if suffix not in DocumentParser.SUPPORTED_TYPES:
             raise WorkflowValidationError(f"不支持的格式: {suffix}")
+        validate_file_signature(filename, content)
 
         with FileTransaction() as tx:
             save_path = tx.write_bytes(self._next_upload_path(filename), content)

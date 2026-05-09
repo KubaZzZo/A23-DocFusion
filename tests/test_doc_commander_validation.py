@@ -73,6 +73,29 @@ def test_execute_rejects_empty_find_replace_before_backup():
         path.unlink(missing_ok=True)
 
 
+def test_find_replace_updates_table_cells():
+    path = TEST_DATA_DIR / f"table_replace_{uuid4().hex}.docx"
+    doc = Document()
+    doc.add_paragraph("outside old")
+    table = doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "inside old"
+    doc.save(path)
+    commander = DocCommander.__new__(DocCommander)
+
+    try:
+        result = commander.execute(
+            str(path),
+            {"action": "find_replace", "params": {"find": "old", "replace": "new"}},
+        )
+
+        updated = Document(path)
+        assert result["success"] is True
+        assert updated.paragraphs[0].text == "outside new"
+        assert updated.tables[0].cell(0, 0).text == "inside new"
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def test_execute_rejects_invalid_extract_target_without_backup():
     path = _make_docx()
     before_backups = _backup_names()
@@ -150,5 +173,38 @@ def test_execute_rejects_unexpected_format_param_before_backup():
         assert result["success"] is False
         assert "macro" in result["message"]
         assert _backup_names() == before_backups
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_execute_edit_extract_and_structure_handlers():
+    path = TEST_DATA_DIR / f"handler_case_{uuid4().hex}.docx"
+    doc = Document()
+    doc.add_paragraph("old paragraph")
+    table = doc.add_table(rows=2, cols=1)
+    table.cell(0, 0).text = "Header"
+    table.cell(1, 0).text = "Value"
+    doc.save(path)
+    commander = DocCommander.__new__(DocCommander)
+
+    try:
+        edit_result = commander.execute(
+            str(path),
+            {"action": "edit", "params": {"operation": "replace", "index": 0, "text": "new paragraph"}},
+        )
+        structure_result = commander.execute(
+            str(path),
+            {"action": "structure", "params": {"operation": "add_heading", "text": "Added Heading", "level": 2}},
+        )
+        extract_text = commander.execute(str(path), {"action": "extract", "target": "text", "params": {}})
+        extract_tables = commander.execute(str(path), {"action": "extract", "target": "tables", "params": {}})
+        updated = Document(path)
+
+        assert edit_result["success"] is True
+        assert structure_result["success"] is True
+        assert updated.paragraphs[0].text == "new paragraph"
+        assert any(p.text == "Added Heading" for p in updated.paragraphs)
+        assert "new paragraph" in extract_text["data"]
+        assert extract_tables["data"] == [[["Header"], ["Value"]]]
     finally:
         path.unlink(missing_ok=True)

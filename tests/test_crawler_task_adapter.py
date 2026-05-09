@@ -20,7 +20,7 @@ class FakeDocumentDAO:
     docs = []
 
     @classmethod
-    def create(cls, filename: str, file_type: str, file_path: str):
+    def create(cls, filename: str, file_type: str, file_path: str, session=None):
         doc = SimpleNamespace(
             id=len(cls.docs) + 1,
             filename=filename,
@@ -28,16 +28,20 @@ class FakeDocumentDAO:
             file_path=file_path,
             raw_text="",
         )
-        cls.docs.append(doc)
+        if session is not None:
+            session.add_document(doc)
+        else:
+            cls.docs.append(doc)
         return doc
 
     @classmethod
-    def update_text(cls, doc_id: int, raw_text: str):
-        cls.get_by_id(doc_id).raw_text = raw_text
+    def update_text(cls, doc_id: int, raw_text: str, session=None):
+        cls.get_by_id(doc_id, session=session).raw_text = raw_text
 
     @classmethod
-    def get_by_id(cls, doc_id: int):
-        return next((doc for doc in cls.docs if doc.id == doc_id), None)
+    def get_by_id(cls, doc_id: int, session=None):
+        docs = cls.docs if session is None else session.documents
+        return next((doc for doc in docs if doc.id == doc_id), None)
 
 
 class FakeArticleDAO:
@@ -53,8 +57,14 @@ class FakeEntityDAO:
     batches = []
 
     @classmethod
-    def create_batch(cls, doc_id: int, entities: list[dict]):
+    def create_batch(cls, doc_id: int, entities: list[dict], session=None):
         cls.batches.append((doc_id, list(entities)))
+
+
+class FailingEntityDAO:
+    @classmethod
+    def create_batch(cls, doc_id: int, entities: list[dict], session=None):
+        raise RuntimeError("entity write failed")
 
 
 class FakeDocumentWorkflow:
@@ -67,6 +77,26 @@ class FakeDocumentWorkflow:
         file_path.write_bytes(content)
         doc = FakeDocumentDAO.create(filename, "txt", str(file_path))
         return {"id": doc.id, "filename": doc.filename, "file_type": doc.file_type, "path": doc.file_path}
+
+
+class FakeSession:
+    def __init__(self):
+        self.documents = []
+
+    def add_document(self, doc):
+        self.documents.append(doc)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            FakeDocumentDAO.docs.extend(self.documents)
+        return False
+
+
+def fake_session_scope():
+    return FakeSession()
 
 
 def setup_function():
@@ -84,6 +114,19 @@ def make_adapter() -> CrawlerTaskAdapter:
         document_workflow_cls=FakeDocumentWorkflow,
         entity_extractor_cls=FakeExtractor,
         crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
+        session_scope_factory=fake_session_scope,
+    )
+
+
+def make_failing_entity_adapter() -> CrawlerTaskAdapter:
+    return CrawlerTaskAdapter(
+        article_dao=FakeArticleDAO,
+        document_dao=FakeDocumentDAO,
+        entity_dao=FailingEntityDAO,
+        document_workflow_cls=FakeDocumentWorkflow,
+        entity_extractor_cls=FakeExtractor,
+        crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
+        session_scope_factory=fake_session_scope,
     )
 
 
@@ -127,3 +170,27 @@ def test_adapter_honors_cancel_between_articles():
     assert result["cancelled"] is True
     assert result["processed"] == 1
     assert result["total"] == 2
+
+
+def test_adapter_processes_multiple_articles_with_bounded_parallel_path():
+    progress_events = []
+
+    result = make_adapter().import_articles(
+        [make_article("one"), make_article("two"), make_article("three")],
+        progress_events.append,
+    )
+
+    assert result == {"entity_count": 3, "processed": 3, "total": 3, "cancelled": False}
+    assert len(FakeDocumentDAO.docs) == 3
+    assert len(FakeEntityDAO.batches) == 3
+    assert progress_events[-1] == {"current": 3, "total": 3}
+
+
+def test_adapter_rolls_back_document_when_entity_write_fails():
+    progress_events = []
+
+    result = make_failing_entity_adapter().import_articles([make_article("one")], progress_events.append)
+
+    assert result == {"entity_count": 0, "processed": 1, "total": 1, "cancelled": False}
+    assert FakeDocumentDAO.docs == []
+    assert progress_events == [{"current": 1, "total": 1}]

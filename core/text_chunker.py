@@ -13,8 +13,17 @@ class TextChunker:
         paragraphs = text.split("\n")
         chunks = []
         current_chunk = ""
+        step = max(1, chunk_size - overlap)
 
         for para in paragraphs:
+            if len(para) > chunk_size:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                for start in range(0, len(para), step):
+                    chunks.append(para[start:start + chunk_size].strip())
+                current_chunk = ""
+                continue
+
             if len(current_chunk) + len(para) + 1 > chunk_size:
                 if current_chunk:
                     chunks.append(current_chunk.strip())

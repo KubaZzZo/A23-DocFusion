@@ -382,11 +382,15 @@ class DashboardPanel(QWidget):
         layout.addWidget(splitter, 1)
 
     def refresh(self):
-        try:
-            snapshot = build_dashboard_snapshot()
-            self._render_snapshot(snapshot)
-        except Exception as e:
-            log.warning("刷新数据概览失败: %s", e)
+        if getattr(self, "refresh_worker", None) and self.refresh_worker.isRunning():
+            return
+        self.refresh_worker = TaskWorker(build_dashboard_snapshot, error_prefix="dashboard refresh")
+        self.refresh_worker.succeeded.connect(self._render_snapshot)
+        self.refresh_worker.failed.connect(self._on_refresh_error)
+        self.refresh_worker.start()
+
+    def _on_refresh_error(self, msg: str):
+        log.warning("刷新数据概览失败: %s", msg)
 
     def _render_snapshot(self, snapshot):
         docs = snapshot.docs
@@ -451,6 +455,7 @@ class DashboardPanel(QWidget):
         self._render_fusion_table()
 
     def _render_fusion_table(self):
+        self.fusion_table.setRowCount(0)
         self.fusion_table.clearSpans()
         if not self.cross_doc_entities:
             self.fusion_table.setRowCount(1)
@@ -526,40 +531,54 @@ class DashboardPanel(QWidget):
         if not question:
             return
 
-        try:
-            all_entities = EntityDAO.get_all()
-            if not all_entities:
-                QMessageBox.warning(self, "提示", "实体库为空，请先提取文档实体")
-                return
+        self.btn_entity_qa.setEnabled(False)
+        self.btn_entity_qa.setText("???...")
+        self.txt_entity_answer.setPlainText("???????...")
+        self.qa_prepare_worker = TaskWorker(
+            lambda: self._prepare_entity_qa(question),
+            error_prefix="entity qa prepare",
+        )
+        self.qa_prepare_worker.succeeded.connect(self._start_entity_qa)
+        self.qa_prepare_worker.failed.connect(self._on_entity_qa_error)
+        self.qa_prepare_worker.start()
 
-            matched = [
-                e for e in all_entities
-                if e.entity_value and (e.entity_value in question or question in e.entity_value)
-            ]
-            seed_entities = matched or all_entities
-            entities = [
-                {
-                    "type": e.entity_type,
-                    "value": e.entity_value,
-                    "context": e.context or "",
-                    "confidence": e.confidence if e.confidence is not None else "",
-                }
-                for e in seed_entities
-            ]
+    @staticmethod
+    def _prepare_entity_qa(question: str) -> tuple[str, list[dict]]:
+        all_entities = EntityDAO.get_all(limit=1000)
+        matched = [
+            e for e in all_entities
+            if e.entity_value and (e.entity_value in question or question in e.entity_value)
+        ]
+        seed_entities = matched or all_entities
+        entities = [
+            {
+                "type": e.entity_type,
+                "value": e.entity_value,
+                "context": e.context or "",
+                "confidence": e.confidence if e.confidence is not None else "",
+            }
+            for e in seed_entities
+        ]
+        return question, entities
 
-            self.btn_entity_qa.setEnabled(False)
-            self.btn_entity_qa.setText("思考中...")
-            self.txt_entity_answer.setPlainText("正在基于实体库生成答案...")
-            self.qa_worker = TaskWorker(
-                lambda: self._run_entity_qa_task(question, entities),
-                error_prefix="entity qa",
-            )
-            self.qa_worker.succeeded.connect(self._on_entity_answer)
-            self.qa_worker.failed.connect(self._on_entity_qa_error)
-            self.qa_worker.start()
-        except Exception as e:
-            log.warning("实体问答启动失败: %s", e)
-            QMessageBox.critical(self, "问答失败", str(e))
+    def _start_entity_qa(self, payload: tuple[str, list[dict]]):
+        question, entities = payload
+        if not entities:
+            self.btn_entity_qa.setEnabled(True)
+            self.btn_entity_qa.setText("提问")
+            self.txt_entity_answer.setPlainText("")
+            QMessageBox.warning(self, "提示", "当前没有可用的实体数据，请先进行实体提取")
+            return
+
+        self.btn_entity_qa.setText("思考中...")
+        self.txt_entity_answer.setPlainText("正在分析实体数据，请稍候...")
+        self.qa_worker = TaskWorker(
+            lambda: self._run_entity_qa_task(question, entities),
+            error_prefix="entity qa",
+        )
+        self.qa_worker.succeeded.connect(self._on_entity_answer)
+        self.qa_worker.failed.connect(self._on_entity_qa_error)
+        self.qa_worker.start()
 
     @staticmethod
     def _run_entity_qa_task(question: str, entities: list[dict]) -> str:
@@ -596,16 +615,21 @@ class DashboardPanel(QWidget):
             self.entity_search_table.setRowCount(0)
             return
 
-        try:
-            entities = EntityDAO.search(keyword)
-            self.entity_search_table.setRowCount(len(entities))
-            for i, e in enumerate(entities):
-                meta = ENTITY_TYPE_META.get(e.entity_type, (e.entity_type, "#8C8C8C"))
-                type_item = QTableWidgetItem(meta[0])
-                type_item.setForeground(QColor(meta[1]))
-                self.entity_search_table.setItem(i, 0, type_item)
-                self.entity_search_table.setItem(i, 1, QTableWidgetItem(e.entity_value))
-                self.entity_search_table.setItem(i, 2, QTableWidgetItem(e.context or ""))
-            self.entity_search_table.resizeRowsToContents()
-        except Exception as e:
-            log.warning("搜索实体失败: %s", e)
+        self.search_worker = TaskWorker(
+            lambda: EntityDAO.search(keyword, limit=200),
+            error_prefix="entity search",
+        )
+        self.search_worker.succeeded.connect(self._render_entity_search_results)
+        self.search_worker.failed.connect(lambda msg: log.warning("??????: %s", msg))
+        self.search_worker.start()
+
+    def _render_entity_search_results(self, entities):
+        self.entity_search_table.setRowCount(len(entities))
+        for i, e in enumerate(entities):
+            meta = ENTITY_TYPE_META.get(e.entity_type, (e.entity_type, "#8C8C8C"))
+            type_item = QTableWidgetItem(meta[0])
+            type_item.setForeground(QColor(meta[1]))
+            self.entity_search_table.setItem(i, 0, type_item)
+            self.entity_search_table.setItem(i, 1, QTableWidgetItem(e.entity_value))
+            self.entity_search_table.setItem(i, 2, QTableWidgetItem(e.context or ""))
+        self.entity_search_table.resizeRowsToContents()

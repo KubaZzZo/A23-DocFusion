@@ -4,7 +4,7 @@ from db.database import CrawledArticleDAO
 
 
 class ArticleWorkflow:
-    def list_articles(self) -> list[dict]:
+    def list_articles(self, limit: int | None = None, offset: int = 0) -> list[dict]:
         return [
             {
                 "id": article.id,
@@ -15,7 +15,7 @@ class ArticleWorkflow:
                 "category": article.category,
                 "crawled_at": article.crawled_at.isoformat() if article.crawled_at else None,
             }
-            for article in CrawledArticleDAO.get_all()
+            for article in CrawledArticleDAO.get_all(limit=limit, offset=offset)
         ]
 
     def get_article(self, article_id: int) -> dict:

@@ -1,11 +1,14 @@
 """Workflow module tests for API route orchestration."""
 import asyncio
 import io
+import csv
 import shutil
 from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
+from openpyxl import load_workbook
+from docx import Document
 
 from db.models import Base, engine
 from db.database import DocumentDAO, EntityDAO, FillTaskDAO, CrawledArticleDAO
@@ -41,6 +44,17 @@ def _xlsx_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _multirow_xlsx_bytes() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["name", "phone", "email"])
+    for _ in range(10):
+        sheet.append(["", "", ""])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def test_document_workflow_uploads_and_renames_duplicate_files():
     workflow = DocumentWorkflow(upload_dir=WORKFLOW_UPLOAD_DIR)
 
@@ -59,6 +73,14 @@ def test_document_workflow_rejects_unsupported_upload_format():
 
     with pytest.raises(WorkflowValidationError):
         workflow.upload_document("bad.xyz", b"data")
+
+
+def test_document_workflow_rejects_oversized_upload(monkeypatch):
+    workflow = DocumentWorkflow(upload_dir=WORKFLOW_UPLOAD_DIR)
+    monkeypatch.setattr("core.upload_limits.MAX_UPLOAD_SIZE", 4)
+
+    with pytest.raises(WorkflowValidationError):
+        workflow.upload_document("large.txt", b"12345")
 
 
 def test_document_workflow_cleans_uploaded_file_when_database_create_fails(monkeypatch):
@@ -87,6 +109,26 @@ def test_document_workflow_parses_uploaded_document():
     assert DocumentDAO.get_by_id(uploaded["id"]).raw_text == "解析内容"
 
 
+def test_document_workflow_execute_command_updates_document_file(monkeypatch):
+    workflow = DocumentWorkflow(upload_dir=WORKFLOW_UPLOAD_DIR)
+    buffer = io.BytesIO()
+    docx = Document()
+    docx.add_paragraph("old text")
+    docx.save(buffer)
+    uploaded = workflow.upload_document("command.docx", buffer.getvalue())
+
+    async def fake_parse_command(self, user_input, doc_info=""):
+        return {"action": "find_replace", "params": {"find": "old", "replace": "new"}}
+
+    monkeypatch.setattr("core.document_workflow.DocCommander.parse_command", fake_parse_command)
+
+    result = asyncio.run(workflow.execute_command(uploaded["id"], "replace old"))
+    updated = Document(uploaded["path"])
+
+    assert result["result"]["success"] is True
+    assert updated.paragraphs[0].text == "new text"
+
+
 def test_template_workflow_uploads_template_and_creates_fill_task():
     template_workflow = TemplateWorkflow(upload_dir=WORKFLOW_UPLOAD_DIR)
     document = DocumentDAO.create("doc.txt", "txt", "/tmp/doc.txt")
@@ -100,6 +142,14 @@ def test_template_workflow_uploads_template_and_creates_fill_task():
     assert task["status"] == "pending"
     assert FillTaskDAO.get_by_id(task["task_id"]) is not None
     assert task["entities"] == [{"type": "person", "value": "张三", "confidence": 0.9}]
+
+
+def test_template_workflow_rejects_oversized_upload(monkeypatch):
+    template_workflow = TemplateWorkflow(upload_dir=WORKFLOW_UPLOAD_DIR)
+    monkeypatch.setattr("core.upload_limits.MAX_UPLOAD_SIZE", 4)
+
+    with pytest.raises(WorkflowValidationError):
+        asyncio.run(template_workflow.upload_template("large.xlsx", b"12345"))
 
 
 def test_template_workflow_cleans_uploaded_file_when_analysis_fails(monkeypatch):
@@ -121,12 +171,26 @@ def test_template_workflow_fills_confirmed_map_to_output_file():
     template = asyncio.run(template_workflow.upload_template("confirmed.xlsx", _xlsx_bytes()))
     fill_map = {"姓名": "张三"}
 
-    result = template_workflow.fill_confirmed_map(template["path"], fill_map)
+    result = asyncio.run(template_workflow.fill_confirmed_map(template["path"], fill_map))
 
     assert result["success"] is True
     assert result["filled"] == 1
     assert result["total"] == 2
     assert Path(result["output_path"]).exists()
+
+
+def test_template_fill_reports_unique_fields_and_cell_count():
+    template_workflow = TemplateWorkflow(upload_dir=WORKFLOW_UPLOAD_DIR)
+    template = asyncio.run(template_workflow.upload_template("multirow.xlsx", _multirow_xlsx_bytes()))
+    fill_map = {"name": "Alice", "phone": "13800138000", "email": "a@example.com"}
+
+    result = asyncio.run(template_workflow.fill_confirmed_map(template["path"], fill_map))
+
+    assert result["filled"] == 3
+    assert result["total"] == 3
+    assert result["filled_cells"] == 30
+    assert result["total_cells"] == 30
+    assert result["message"] == "3/3 fields matched, written to 30 cells"
 
 
 def test_entity_workflow_lists_filters_and_exports_entities():
@@ -148,6 +212,23 @@ def test_entity_workflow_lists_filters_and_exports_entities():
     assert xlsx_export.filename == "entities.xlsx"
     assert xlsx_export.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     assert xlsx_export.content.startswith(b"PK")
+
+
+def test_entity_workflow_escapes_formula_values_in_exports():
+    workflow = EntityWorkflow()
+    doc = DocumentDAO.create("a.txt", "txt", "/tmp/a.txt")
+    EntityDAO.create_batch(doc.id, [{"type": "custom", "value": "=cmd|calc", "context": "+danger", "confidence": 0.9}])
+
+    csv_export = workflow.export_entities("csv")
+    rows = list(csv.DictReader(io.StringIO(csv_export.content.decode("utf-8-sig"))))
+    assert rows[0]["value"] == "'=cmd|calc"
+    assert rows[0]["context"] == "'+danger"
+
+    xlsx_export = workflow.export_entities("xlsx")
+    workbook = load_workbook(io.BytesIO(xlsx_export.content))
+    sheet = workbook.active
+    assert sheet["C2"].value == "'=cmd|calc"
+    assert sheet["D2"].value == "'+danger"
 
 
 def test_article_workflow_lists_and_fetches_article_details():

@@ -1,4 +1,4 @@
-"""文档智能操作 - 自然语言指令解析与执行"""
+﻿"""Natural-language document command parsing and execution."""
 import json
 import shutil
 from pathlib import Path
@@ -10,32 +10,32 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from llm import get_llm
 from llm.base import strip_json_code_fence
+from llm.prompt_safety import UNTRUSTED_INPUT_NOTICE, wrap_untrusted_input
 from config import DATA_DIR
 
 BACKUP_DIR = DATA_DIR / "backups"
 BACKUP_DIR.mkdir(exist_ok=True)
 
-COMMAND_PARSE_PROMPT = """你是一个文档操作指令解析器。用户会用自然语言描述对文档的操作需求，你需要将其转换为结构化的操作指令JSON。
+COMMAND_PARSE_PROMPT = """You parse natural-language document editing requests into strict JSON commands.
+Supported actions:
+1. format - formatting changes: bold, italic, underline, font_size, font_name, color, alignment.
+2. edit - content edits: insert, delete, replace.
+3. extract - extract text, tables, or headings.
+4. find_replace - find and replace text.
+5. structure - add headings or paragraphs.
 
-支持的操作类型：
-1. format - 格式调整（bold, italic, underline, font_size, font_name, color, alignment）
-2. edit - 内容编辑（insert, delete, replace）
-3. extract - 内容提取（extract_text, extract_tables, extract_headings）
-4. find_replace - 查找替换
-5. structure - 结构操作（add_heading, add_paragraph, add_table）
-
-请输出JSON格式：
+Return only JSON in this shape:
 {
-  "action": "操作类型",
-  "target": "操作目标(paragraph/table/heading/all)",
-  "params": {具体参数},
-  "description": "操作描述"
+  "action": "format|edit|extract|find_replace|structure",
+  "target": "paragraph|table_row|text|tables|headings|all",
+  "params": {},
+  "description": "short operation description"
 }
 
-示例：
-用户："把第二段加粗" → {"action":"format","target":"paragraph","params":{"index":1,"bold":true},"description":"将第2段加粗"}
-用户："查找所有'公司'替换为'企业'" → {"action":"find_replace","target":"all","params":{"find":"公司","replace":"企业"},"description":"全文替换"}
-用户："提取所有表格" → {"action":"extract","target":"tables","params":{},"description":"提取所有表格内容"}
+Examples:
+Make the second paragraph bold -> {"action":"format","target":"paragraph","params":{"index":1,"bold":true},"description":"make paragraph 2 bold"}
+Replace every occurrence of company with enterprise -> {"action":"find_replace","target":"all","params":{"find":"company","replace":"enterprise"},"description":"replace text globally"}
+Extract all tables -> {"action":"extract","target":"tables","params":{},"description":"extract all tables"}
 """
 
 
@@ -105,16 +105,23 @@ PARAM_SCHEMAS = {
 
 
 class DocCommander:
-    """文档智能操作执行器"""
+    """Document command executor."""
 
     def __init__(self, provider: str = None):
         self.llm = get_llm(provider)
 
     async def parse_command(self, user_input: str, doc_info: str = "") -> dict:
-        """解析自然语言指令为操作JSON"""
+        """Parse natural-language input into a command JSON object."""
         messages = [
             {"role": "system", "content": COMMAND_PARSE_PROMPT},
-            {"role": "user", "content": f"文档信息：{doc_info}\n\n用户指令：{user_input}"},
+            {
+                "role": "user",
+                "content": (
+                    f"{UNTRUSTED_INPUT_NOTICE}\n\n"
+                    f"document_info:\n{wrap_untrusted_input(doc_info)}\n\n"
+                    f"user_command:\n{wrap_untrusted_input(user_input)}"
+                ),
+            },
         ]
         result = await self.llm.chat(messages)
         try:
@@ -126,7 +133,7 @@ class DocCommander:
 
     @staticmethod
     def _normalize_command(user_input: str, parsed: dict) -> dict:
-        """对 LLM 输出做轻量纠偏，避免常见文档结构歧义。"""
+        """Normalize common LLM command variants."""
         if not isinstance(parsed, dict):
             return parsed
 
@@ -141,16 +148,16 @@ class DocCommander:
             and target == "paragraph"
             and isinstance(params, dict)
             and "index" in params
-            and "行" in text
+            and ("行" in text or "row" in text.lower() or "table" in text.lower())
         ):
             parsed["target"] = "table_row"
 
         return parsed
 
     def execute(self, doc_path: str, command: dict) -> dict:
-        """执行操作指令（自动备份原文件）"""
+        """Execute a validated document command and back up mutable operations."""
         if Path(doc_path).suffix.lower() != ".docx":
-            return {"success": False, "message": "文档智能操作目前仅支持 .docx 格式"}
+            return {"success": False, "message": "DocCommander currently supports only .docx files"}
 
         validation_error = self._validate_command(command)
         if validation_error:
@@ -166,13 +173,9 @@ class DocCommander:
         }
         handler = handlers.get(action)
         if not handler:
-            return {"success": False, "message": f"不支持的操作: {action}"}
+            return {"success": False, "message": f"Unsupported action: {action}"}
 
-        # extract 是只读操作，不需要备份
-        if action != "extract":
-            backup_path = self._backup(doc_path)
-        else:
-            backup_path = None
+        backup_path = None if action == "extract" else self._backup(doc_path)
 
         try:
             params = dict(command.get("params", {}))
@@ -183,7 +186,7 @@ class DocCommander:
                 result["backup_path"] = str(backup_path)
             return result
         except Exception as e:
-            # 操作失败时自动恢复
+            # Restore the original file when a mutable operation fails.
             if backup_path and Path(backup_path).exists():
                 shutil.copyfile(backup_path, doc_path)
                 Path(doc_path).chmod(0o666)
@@ -217,74 +220,8 @@ class DocCommander:
         return f"{loc}: {message}" if loc else message
 
     @staticmethod
-    def _validate_format_command(target, params: dict) -> str:
-        allowed_targets = {"paragraph", "table_row", None}
-        if target not in allowed_targets:
-            return f"target 不支持: {target}"
-        if "index" in params and (not isinstance(params["index"], int) or params["index"] < 0):
-            return "index must be a non-negative integer"
-        if "font_size" in params and (
-            not isinstance(params["font_size"], (int, float)) or params["font_size"] <= 0
-        ):
-            return "font_size must be a positive number"
-        if "color" in params:
-            color = params["color"]
-            if (
-                not isinstance(color, (list, tuple))
-                or len(color) != 3
-                or any(not isinstance(value, int) or value < 0 or value > 255 for value in color)
-            ):
-                return "color must be three integers between 0 and 255"
-        if "alignment" in params and params["alignment"] not in {"left", "center", "right", "justify"}:
-            return f"alignment 不支持: {params['alignment']}"
-        for key in ("bold", "italic", "underline"):
-            if key in params and not isinstance(params[key], bool):
-                return f"{key} must be a boolean"
-        return ""
-
-    @staticmethod
-    def _validate_edit_command(params: dict) -> str:
-        operation = params.get("operation", "replace")
-        if operation not in {"replace", "insert", "delete"}:
-            return f"operation 不支持: {operation}"
-        if operation in {"replace", "delete"} and (
-            "index" not in params or not isinstance(params["index"], int) or params["index"] < 0
-        ):
-            return "index must be a non-negative integer"
-        if operation in {"replace", "insert"} and not isinstance(params.get("text", ""), str):
-            return "text must be a string"
-        return ""
-
-    @staticmethod
-    def _validate_find_replace_command(params: dict) -> str:
-        if not isinstance(params.get("find"), str) or not params.get("find"):
-            return "find must be a non-empty string"
-        if not isinstance(params.get("replace", ""), str):
-            return "replace must be a string"
-        return ""
-
-    @staticmethod
-    def _validate_extract_command(target) -> str:
-        if target not in {"text", "tables", "headings", None}:
-            return f"target 不支持: {target}"
-        return ""
-
-    @staticmethod
-    def _validate_structure_command(params: dict) -> str:
-        operation = params.get("operation", "add_paragraph")
-        if operation not in {"add_heading", "add_paragraph"}:
-            return f"operation 不支持: {operation}"
-        if not isinstance(params.get("text", ""), str):
-            return "text must be a string"
-        if operation == "add_heading":
-            level = params.get("level", 1)
-            if not isinstance(level, int) or level < 1 or level > 9:
-                return "level must be an integer between 1 and 9"
-        return ""
-
-    @staticmethod
     def _backup(doc_path: str) -> Path:
-        """备份文件，返回备份路径"""
+        """Create a backup file and return its path."""
         src = Path(doc_path)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = BACKUP_DIR / f"{src.stem}_{timestamp}{src.suffix}"
@@ -300,10 +237,10 @@ class DocCommander:
             row_idx = params.get("index", 0)
             tables = doc.tables
             if not tables:
-                return {"success": False, "message": "当前文档中没有表格，无法按“行”执行格式操作"}
+                return {"success": False, "message": "No table is available for table-row formatting"}
             first_table = tables[0]
             if row_idx >= len(first_table.rows):
-                return {"success": False, "message": f"表格行索引{row_idx}超出范围"}
+                return {"success": False, "message": f"Table row index {row_idx} is out of range"}
 
             for cell in first_table.rows[row_idx].cells:
                 for para in cell.paragraphs:
@@ -332,11 +269,11 @@ class DocCommander:
                         para.alignment = align_map.get(params["alignment"], WD_ALIGN_PARAGRAPH.LEFT)
 
             doc.save(doc_path)
-            return {"success": True, "message": f"已完成第{row_idx + 1}行格式调整"}
+            return {"success": True, "message": f"Formatted table row {row_idx + 1}"}
 
         idx = params.get("index", 0)
         if idx >= len(doc.paragraphs):
-            return {"success": False, "message": f"段落索引{idx}超出范围"}
+            return {"success": False, "message": f"Paragraph index {idx} is out of range"}
 
         para = doc.paragraphs[idx]
         for run in para.runs:
@@ -360,7 +297,7 @@ class DocCommander:
             para.alignment = align_map.get(params["alignment"], WD_ALIGN_PARAGRAPH.LEFT)
 
         doc.save(doc_path)
-        return {"success": True, "message": "格式调整完成"}
+        return {"success": True, "message": "Formatting completed"}
 
     def _handle_edit(self, doc_path: str, params: dict) -> dict:
         doc = DocxDocument(doc_path)
@@ -379,7 +316,7 @@ class DocCommander:
                 p.getparent().remove(p)
 
         doc.save(doc_path)
-        return {"success": True, "message": "编辑完成"}
+        return {"success": True, "message": "Edit completed"}
 
     def _handle_find_replace(self, doc_path: str, params: dict) -> dict:
         doc = DocxDocument(doc_path)
@@ -387,19 +324,27 @@ class DocCommander:
         replace_text = params.get("replace", "")
         count = 0
         if not find_text:
-            return {"success": False, "message": "查找内容不能为空"}
+            return {"success": False, "message": "Find text cannot be empty"}
 
         for para in doc.paragraphs:
             if find_text not in para.text:
                 continue
             count += self._replace_in_paragraph_runs(para, find_text, replace_text)
 
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        if find_text not in para.text:
+                            continue
+                        count += self._replace_in_paragraph_runs(para, find_text, replace_text)
+
         doc.save(doc_path)
-        return {"success": True, "message": f"替换完成，共替换{count}处"}
+        return {"success": True, "message": f"Replacement completed, {count} occurrence(s) replaced"}
 
     @staticmethod
     def _replace_in_paragraph_runs(para, find_text: str, replace_text: str) -> int:
-        """在 run 层面执行替换，尽量保留未命中内容的原有格式。"""
+        """Replace text at run level while preserving unaffected run formatting."""
         matches = []
         full_text_parts = []
         char_map = []
@@ -465,4 +410,4 @@ class DocCommander:
             doc.add_paragraph(params.get("text", ""))
 
         doc.save(doc_path)
-        return {"success": True, "message": "结构操作完成"}
+        return {"success": True, "message": "Structure operation completed"}

@@ -50,14 +50,15 @@ def normalize_entity_result(result: dict) -> dict:
             confidence = float(entity.get("confidence", 0.0) or 0.0)
         except (TypeError, ValueError):
             confidence = 0.0
-        normalized_entities.append(
-            {
-                "type": entity_type,
-                "value": value,
-                "context": str(entity.get("context") or ""),
-                "confidence": confidence,
-            }
-        )
+        normalized = {
+            "type": entity_type,
+            "value": value,
+            "context": str(entity.get("context") or ""),
+            "confidence": confidence,
+        }
+        if "verified" in entity:
+            normalized["verified"] = bool(entity.get("verified"))
+        normalized_entities.append(normalized)
 
     return {
         "entities": normalized_entities,

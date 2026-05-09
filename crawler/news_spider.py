@@ -1,14 +1,16 @@
 """新闻爬虫核心逻辑 - 爬取公开新闻源"""
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import httpx
 from bs4 import BeautifulSoup
 from datetime import datetime
 import re
 import random
-import time
 from logger import get_logger
 
 
 log = get_logger("crawler.news_spider")
+DETAIL_CONCURRENCY = 3
 
 
 USER_AGENTS = [
@@ -58,7 +60,7 @@ class NewsSpider:
     def __init__(self):
         self.client = httpx.Client(
             timeout=15,
-            follow_redirects=True,
+            follow_redirects=False,
             headers={"User-Agent": random.choice(USER_AGENTS)},
         )
 
@@ -116,27 +118,38 @@ class NewsSpider:
             self._notify_progress(progress_cb, 0, count, msg)
             return []
 
-        articles = []
-        for i, (title, url) in enumerate(urls):
-            try:
-                detail = detail_parser(url)
-                detail["title"] = title
-                detail["source"] = source
-                detail["url"] = url
-                articles.append(detail)
-            except NetworkFetchError as e:
-                msg = f"爬取{source}详情失败: {url} - {e}"
-                log.warning(msg)
-                self._notify_progress(progress_cb, i + 1, len(urls), msg)
-            except Exception as e:
-                error = ArticleParseError(f"{url} - {e}")
-                msg = f"解析{source}详情失败: {error}"
-                log.warning(msg)
-                self._notify_progress(progress_cb, i + 1, len(urls), msg)
-            else:
-                self._notify_progress(progress_cb, i + 1, len(urls))
-            time.sleep(random.uniform(0.5, 1.5))
-        return articles
+        return self._fetch_details_concurrently(source, urls, detail_parser, progress_cb)
+
+    def _fetch_details_concurrently(self, source: str, urls: list[tuple[str, str]], detail_parser, progress_cb=None):
+        indexed_articles = []
+        completed = 0
+        with ThreadPoolExecutor(max_workers=DETAIL_CONCURRENCY) as executor:
+            futures = {
+                executor.submit(detail_parser, url): (i, title, url)
+                for i, (title, url) in enumerate(urls)
+            }
+            for future in as_completed(futures):
+                i, title, url = futures[future]
+                completed += 1
+                try:
+                    detail = future.result()
+                    detail["title"] = title
+                    detail["source"] = source
+                    detail["url"] = url
+                    indexed_articles.append((i, detail))
+                    self._notify_progress(progress_cb, completed, len(urls))
+                except NetworkFetchError as e:
+                    msg = f"fetch detail failed: source={source}, url={url}, error={e}"
+                    log.warning(msg)
+                    self._notify_progress(progress_cb, completed, len(urls), msg)
+                except Exception as e:
+                    error = ArticleParseError(f"{url} - {e}")
+                    msg = f"parse detail failed: source={source}, error={error}"
+                    log.warning(msg)
+                    self._notify_progress(progress_cb, completed, len(urls), msg)
+
+        indexed_articles.sort(key=lambda item: item[0])
+        return [article for _, article in indexed_articles]
 
     @staticmethod
     def _unique_links(nodes, count: int, min_title_len: int, url_builder, href_filter=None) -> list[tuple[str, str]]:

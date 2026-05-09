@@ -143,6 +143,8 @@ def test_doc_panel_uses_shared_task_worker_for_command_execution():
     assert "from ui.task_runner import TaskWorker" in source
     assert "CommandWorker" not in source
     assert "self.worker = TaskWorker(" in source
+    assert 'getattr(self, "worker", None)' in source
+    assert "self.worker.isRunning()" in source
     assert "self.worker.succeeded.connect(self._on_command_done)" in source
     assert "self.worker.failed.connect(self._on_command_error)" in source
 
@@ -157,6 +159,22 @@ def test_fill_panel_uses_shared_task_worker_for_template_matching():
     assert "self.match_worker = TaskWorker(" in source
     assert "self.match_worker.succeeded.connect(self._on_match_done)" in source
     assert "self.match_worker.failed.connect(self._on_fill_error)" in source
+    assert "self.fill_worker = TaskWorker(" in source
+    assert "asyncio.run(self.template_workflow.fill_confirmed_map" in source
+
+
+def test_fill_panel_reuses_upload_template_analysis():
+    source = Path("ui/fill_panel.py").read_text(encoding="utf-8")
+
+    open_template = source[source.index("    def _open_template"):source.index("    def _refresh_entities")]
+
+    # The analysis is reused from the upload response in the background task.
+    # _run_open_template_task runs upload_template() which already analyzes internally.
+    # _on_template_opened reads result.get("fields") without calling TemplateFiller again.
+    assert "upload_template" in open_template
+    assert 'result.get("fields", {})' in open_template
+    assert "TemplateFiller()" not in open_template
+    assert "analyze_template(" not in open_template
 
 
 def test_dashboard_panel_uses_shared_task_worker_for_entity_qa():
@@ -164,9 +182,22 @@ def test_dashboard_panel_uses_shared_task_worker_for_entity_qa():
 
     assert "from ui.task_runner import TaskWorker" in source
     assert "EntityQAWorker" not in source
+    assert "self.refresh_worker = TaskWorker(" in source
+    assert "self.refresh_worker.succeeded.connect(self._render_snapshot)" in source
+    assert "self.search_worker = TaskWorker(" in source
+    assert "self.search_worker.succeeded.connect(self._render_entity_search_results)" in source
+    assert "self.qa_prepare_worker = TaskWorker(" in source
+    assert "self.qa_prepare_worker.succeeded.connect(self._start_entity_qa)" in source
     assert "self.qa_worker = TaskWorker(" in source
     assert "self.qa_worker.succeeded.connect(self._on_entity_answer)" in source
     assert "self.qa_worker.failed.connect(self._on_entity_qa_error)" in source
+
+
+def test_fill_panel_limits_entity_table_refresh():
+    source = Path("ui/fill_panel.py").read_text(encoding="utf-8")
+
+    assert "ENTITY_TABLE_LIMIT" in source
+    assert "EntityDAO.get_all(limit=ENTITY_TABLE_LIMIT)" in source
 
 
 def test_extract_panel_uses_shared_task_worker_for_single_extract():
@@ -180,8 +211,23 @@ def test_extract_panel_uses_shared_task_worker_for_single_extract():
     assert "self.batch_worker = ProgressTaskWorker(" in source
     assert "self.batch_worker.progress.connect(self._on_batch_progress_event)" in source
     assert "self.worker = TaskWorker(" in source
+    assert 'getattr(self, "worker", None)' in source
+    assert "self.worker.isRunning()" in source
+    assert "doc_id = self.current_doc.id if self.current_doc else None" in source
+    assert "lambda: self._run_extract_task(text, doc_id)" in source
+    assert "EntityDAO.create_batch(result_doc_id, entities)" in source
     assert "self.worker.succeeded.connect(self._on_extract_done)" in source
     assert "self.worker.failed.connect(self._on_extract_error)" in source
+
+
+def test_clear_and_reextract_forces_new_extraction_without_existing_entity_check():
+    source = Path("ui/extract_panel.py").read_text(encoding="utf-8")
+    start_extract = source[source.index("    def _start_extract"):source.index("    @staticmethod\n    def _run_extract_task")]
+    clear_and_reextract = source[source.index("    def _clear_and_reextract"):source.index("    def _render_entities")]
+
+    assert "force: bool = False" in start_extract
+    assert "if not force:" in start_extract
+    assert "self._start_extract(force=True)" in clear_and_reextract
 
 
 def test_crawler_panel_uses_shared_task_worker_for_document_generation():
@@ -193,9 +239,14 @@ def test_crawler_panel_uses_shared_task_worker_for_document_generation():
     assert "from ui.task_runner import ProgressTaskWorker, TaskWorker" in source
     assert "class DocGenWorker" not in source
     assert "CrawlWorker" in source
+    assert "self.news_spider = NewsSpider()" in source
+    assert "self.crawl_worker = CrawlWorker(sources, self.spin_count.value(), self.news_spider)" in source
+    assert "        spider = NewsSpider()" not in source
     assert "class ImportWorker" not in source
     assert "self.import_worker = ProgressTaskWorker(" in source
     assert "self.import_worker.progress.connect(self._on_import_progress_event)" in source
     assert "self.gen_worker = TaskWorker(" in source
+    assert 'getattr(self, "gen_worker", None)' in source
+    assert "self.gen_worker.isRunning()" in source
     assert "self.gen_worker.succeeded.connect(self._on_gen_done)" in source
     assert "self.gen_worker.failed.connect(self._on_gen_error)" in source

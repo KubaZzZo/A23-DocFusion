@@ -1,7 +1,7 @@
-# UI
+﻿# UI
 PyQt6>=6.6.0
 
-# 文档解析
+# 鏂囨。瑙ｆ瀽
 python-docx>=1.1.0
 openpyxl>=3.1.2
 PyMuPDF>=1.23.0
@@ -10,22 +10,22 @@ PyMuPDF>=1.23.0
 openai>=1.12.0
 httpx>=0.27.0
 
-# API服务
+# API鏈嶅姟
 fastapi>=0.109.0
 uvicorn>=0.27.0
 
-# 数据库
-sqlalchemy>=2.0.25
+# 鏁版嵁搴?sqlalchemy>=2.0.25
 
 # OCR
 pytesseract>=0.3.10
 Pillow>=10.0.0
 
-# 工具
+# 宸ュ叿
 pydantic>=2.6.0
 python-multipart>=0.0.6
 aiofiles>=23.2.1
+pytest>=8.0.0
 
-# 爬虫
+# 鐖櫕
 beautifulsoup4>=4.12.0
 lxml>=5.1.0

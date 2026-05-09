@@ -125,11 +125,9 @@ class EntityExtractor:
             f"- [{e.get('type')}] {e.get('value')} (上下文: {e.get('context', '')}, 置信度: {e.get('confidence', 'N/A')})"
             for e in low_conf
         )
-        prompt = VERIFY_PROMPT.format(entities=entities_str)
-
         # 截取原文前3000字作为验证上下文
         context_text = original_text[:3000]
-        verify_result = await self.llm.extract_json(prompt, context_text)
+        verify_result = await self.llm.extract_json(VERIFY_PROMPT.format(entities=entities_str), context_text)
 
         if verify_result.get("parse_error"):
             log.warning("二轮验证解析失败，保留原始结果")

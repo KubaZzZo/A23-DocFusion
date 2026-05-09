@@ -58,5 +58,5 @@ class SemanticMatcher:
             f"- [{e.get('type')}] {e.get('value')} (置信度: {e.get('confidence', 'N/A')})"
             for e in entities
         )
-        prompt = MATCH_PROMPT.format(fields=fields_str, entities=entities_str)
-        return await self.llm.extract_json(prompt, "")
+        user_input = f"fields:\n{fields_str}\n\nentities:\n{entities_str}"
+        return await self.llm.extract_json(MATCH_PROMPT.format(fields="{fields}", entities="{entities}"), user_input)

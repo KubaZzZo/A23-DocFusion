@@ -137,14 +137,23 @@ class DocGenerator:
     def generate_all(articles: list[dict]) -> dict:
         """批量生成所有格式，返回生成的文件路径"""
         gen = DocGenerator()
-        paths = {"docx": [], "txt": [], "md": []}
+        paths = {"docx": [], "txt": [], "md": [], "errors": []}
+        successful_articles = []
         for a in articles:
             if a.get("content"):
-                paths["docx"].append(gen.generate_docx(a))
-                paths["txt"].append(gen.generate_txt(a))
-                paths["md"].append(gen.generate_md(a))
-        if articles:
-            paths["xlsx"] = [gen.generate_xlsx(articles)]
+                try:
+                    docx_path = gen.generate_docx(a)
+                    txt_path = gen.generate_txt(a)
+                    md_path = gen.generate_md(a)
+                except Exception as e:
+                    paths["errors"].append({"title": a.get("title", "article"), "error": str(e)})
+                    continue
+                paths["docx"].append(docx_path)
+                paths["txt"].append(txt_path)
+                paths["md"].append(md_path)
+                successful_articles.append(a)
+        if successful_articles:
+            paths["xlsx"] = [gen.generate_xlsx(successful_articles)]
         return paths
 
 

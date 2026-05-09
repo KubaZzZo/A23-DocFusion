@@ -63,3 +63,13 @@ class TestFileTransaction:
 
         assert path.read_bytes() == b"created"
         path.unlink(missing_ok=True)
+
+    def test_rolls_back_when_exception_is_raised(self):
+        path = TEST_DIR / "transaction_exception.txt"
+
+        with pytest.raises(RuntimeError):
+            with FileTransaction() as tx:
+                tx.write_bytes(path, b"created")
+                raise RuntimeError("boom")
+
+        assert not path.exists()

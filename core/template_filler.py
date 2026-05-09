@@ -6,6 +6,7 @@ from datetime import datetime
 from openpyxl import load_workbook
 from docx import Document as DocxDocument
 from core.semantic_matcher import SemanticMatcher
+from core.spreadsheet_safety import escape_formula_value
 from config import OUTPUT_DIR
 
 
@@ -101,8 +102,11 @@ class TemplateFiller:
         elif suffix == ".docx":
             self._fill_docx(str(output_path), analysis["fields"], fill_map)
 
-        filled_count = sum(1 for f in analysis["fields"] if f["field_name"] in fill_map)
-        total_count = len(analysis["fields"])
+        field_names = analysis["field_names"]
+        filled_count = sum(1 for field_name in field_names if field_name in fill_map)
+        total_count = len(field_names)
+        filled_cells = sum(1 for f in analysis["fields"] if f["field_name"] in fill_map)
+        total_cells = len(analysis["fields"])
 
         return {
             "success": True,
@@ -110,6 +114,9 @@ class TemplateFiller:
             "filled": filled_count,
             "total": total_count,
             "accuracy": filled_count / total_count if total_count > 0 else 0,
+            "filled_cells": filled_cells,
+            "total_cells": total_cells,
+            "message": f"{filled_count}/{total_count} fields matched, written to {filled_cells} cells",
             "unmatched": match_result.get("unmatched_fields", []),
         }
 
@@ -119,7 +126,7 @@ class TemplateFiller:
             value = fill_map.get(f["field_name"])
             if value:
                 ws = wb[f["sheet"]]
-                ws.cell(row=f["row"], column=f["col"], value=value)
+                ws.cell(row=f["row"], column=f["col"], value=escape_formula_value(value))
         wb.save(file_path)
         wb.close()
 

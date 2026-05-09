@@ -1,7 +1,7 @@
 """数据模型定义"""
 from contextlib import contextmanager
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, create_engine
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, create_engine, text
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from config import DB_PATH
 
@@ -24,9 +24,9 @@ class Document(Base):
 class Entity(Base):
     __tablename__ = "entities"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
-    entity_type = Column(String(50), nullable=False)
-    entity_value = Column(Text, nullable=False)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
+    entity_type = Column(String(50), nullable=False, index=True)
+    entity_value = Column(Text, nullable=False, index=True)
     context = Column(Text)
     confidence = Column(Float)
     created_at = Column(DateTime, default=datetime.now)
@@ -101,6 +101,18 @@ def get_database_url() -> str:
 
 def init_db():
     Base.metadata.create_all(engine)
+    ensure_entity_indexes()
+
+
+def ensure_entity_indexes():
+    index_sql = [
+        "CREATE INDEX IF NOT EXISTS ix_entities_document_id ON entities (document_id)",
+        "CREATE INDEX IF NOT EXISTS ix_entities_entity_type ON entities (entity_type)",
+        "CREATE INDEX IF NOT EXISTS ix_entities_entity_value ON entities (entity_value)",
+    ]
+    with engine.begin() as conn:
+        for statement in index_sql:
+            conn.execute(text(statement))
 
 
 def get_session():

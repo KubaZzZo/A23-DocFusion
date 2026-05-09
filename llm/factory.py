@@ -1,9 +1,12 @@
 """LLM client factory."""
+import os
+
 from llm.base import BaseLLM
 from llm.cloud_client import CloudClient
 from llm.ollama_client import OllamaClient
 from llm.provider_presets import CLOUD_VENDOR_PRESETS, build_provider_profile
 from config import LLM_CONFIG
+from settings_store import decode_key
 
 
 def resolve_provider_kind(provider: str | None = None) -> str:
@@ -21,6 +24,10 @@ def get_llm(provider: str | None = None) -> BaseLLM:
         return OllamaClient()
     if kind == "openai_compatible":
         config = dict(LLM_CONFIG["openai"])
+        if not config.get("api_key") and config.get("api_key_ref"):
+            config["api_key"] = decode_key(config["api_key_ref"])
+        if not config.get("api_key"):
+            config["api_key"] = os.getenv("OPENAI_API_KEY", "")
         if provider:
             config["vendor"] = provider
         return CloudClient(build_provider_profile(config))

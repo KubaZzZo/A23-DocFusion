@@ -26,36 +26,34 @@ class CrawlWorker(QThread):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, sources: list[str], count: int):
+    def __init__(self, sources: list[str], count: int, spider: NewsSpider):
         super().__init__()
         self.sources = sources
         self.count = count
+        self.spider = spider
 
     def run(self):
-        spider = None
         try:
-            spider = NewsSpider()
             all_articles = []
             for src in self.sources:
                 def on_progress(cur, total, message="", s=src):
                     self.progress.emit(s, cur, total, message)
 
-                articles = spider.crawl(src, self.count, on_progress)
+                articles = self.spider.crawl(src, self.count, on_progress)
                 for article in articles:
                     self.article_found.emit(article)
                 all_articles.extend(articles)
             self.finished.emit(all_articles)
         except Exception as e:
             self.error.emit(str(e))
-        finally:
-            if spider:
-                spider.close()
 
 
 class CrawlerPanel(QWidget):
     def __init__(self):
         super().__init__()
         self.crawled_articles = []
+        self._importing = False
+        self.news_spider = NewsSpider()
         self.task_adapter = CrawlerTaskAdapter(
             article_dao=CrawledArticleDAO,
             document_dao=DocumentDAO,
@@ -106,7 +104,7 @@ class CrawlerPanel(QWidget):
 
         self.btn_import = QPushButton("导入到数据库")
         mark_secondary(self.btn_import)
-        self.btn_import.clicked.connect(self._import_to_db)
+        self.btn_import.clicked.connect(self._on_import_clicked)
         self.btn_import.setEnabled(False)
         settings_layout.addWidget(self.btn_import)
 
@@ -195,7 +193,7 @@ class CrawlerPanel(QWidget):
         self.lbl_status.setText(f"正在爬取: {', '.join(sources)}")
         self._log(f"开始爬取 {len(sources)} 个新闻源，每源 {self.spin_count.value()} 篇")
 
-        self.crawl_worker = CrawlWorker(sources, self.spin_count.value())
+        self.crawl_worker = CrawlWorker(sources, self.spin_count.value(), self.news_spider)
         self.crawl_worker.progress.connect(self._on_crawl_progress)
         self.crawl_worker.article_found.connect(self._on_article_found)
         self.crawl_worker.finished.connect(self._on_crawl_done)
@@ -238,6 +236,9 @@ class CrawlerPanel(QWidget):
         QMessageBox.critical(self, "爬取失败", msg)
 
     def _generate_docs(self):
+        if getattr(self, "gen_worker", None) and self.gen_worker.isRunning():
+            return
+
         if not self.crawled_articles:
             return
         self.btn_gen_docs.setEnabled(False)
@@ -274,22 +275,31 @@ class CrawlerPanel(QWidget):
         self._log(f"生成错误: {msg}")
         QMessageBox.critical(self, "生成失败", msg)
 
+    def _on_import_clicked(self):
+        if self._importing:
+            self._cancel_import()
+        else:
+            self._import_to_db()
+
     def _import_to_db(self):
-        if not self.crawled_articles:
+        selected_rows = set(index.row() for index in self.result_table.selectedIndexes())
+        articles = (
+            [self.crawled_articles[i] for i in sorted(selected_rows)]
+            if selected_rows
+            else self.crawled_articles
+        )
+        if not articles:
             return
+
+        self._importing = True
         self.btn_import.setText("取消导入")
-        try:
-            self.btn_import.clicked.disconnect()
-        except TypeError:
-            pass
-        self.btn_import.clicked.connect(self._cancel_import)
         self.progress.setVisible(True)
-        self.progress.setRange(0, len(self.crawled_articles))
-        self._log("开始导入到数据库...")
+        self.progress.setRange(0, len(articles))
+        self._log(f"开始导入到数据库... ({len(articles)} 篇)")
 
         self.import_worker = ProgressTaskWorker(
             lambda progress: self._run_import_task(
-                self.crawled_articles,
+                articles,
                 progress,
                 lambda: self.import_worker.isInterruptionRequested(),
             ),
@@ -322,13 +332,9 @@ class CrawlerPanel(QWidget):
         return adapter.import_articles(articles, progress, should_cancel)
 
     def _restore_import_button(self):
+        self._importing = False
         self.btn_import.setEnabled(True)
         self.btn_import.setText("导入到数据库")
-        try:
-            self.btn_import.clicked.disconnect()
-        except TypeError:
-            pass
-        self.btn_import.clicked.connect(self._import_to_db)
 
     def _on_import_done(self, result):
         self.progress.setVisible(False)
