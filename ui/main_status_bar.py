@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton,
 
 from config import LLM_CONFIG
 from llm.provider_presets import get_cloud_vendor_preset
-from ui.task_runner import TaskWorker
+from ui.task_runner import TaskWorker, is_worker_running
 from logger import get_logger
 
 log = get_logger("ui.status_bar")
@@ -30,14 +30,21 @@ def llm_status_snapshot(config: dict | None = None) -> dict:
         label = preset.get("label", cloud.get("vendor", "OpenAI兼容"))
         model = cloud.get("model") or preset.get("model_placeholder") or TEXT_UNCONFIGURED_MODEL
         url = cloud.get("base_url") or preset.get("base_url") or TEXT_UNCONFIGURED_URL
+        proxy_url = cloud.get("proxy_url", "")
+    if provider == "ollama":
+        proxy_url = ""
 
     return {
         "provider": provider,
         "label": label,
         "model": model,
         "url": url,
+        "proxy_url": proxy_url,
         "summary": f"{label} - {model}",
-        "tooltip": f"当前 LLM: {label}\n模型: {model}\n服务地址: {url}",
+        "tooltip": (
+            f"当前 LLM: {label}\n模型: {model}\n服务地址: {url}"
+            + (f"\n代理地址: {proxy_url}" if proxy_url else "")
+        ),
     }
 
 
@@ -129,7 +136,7 @@ class MainStatusBar(QWidget):
         self.lbl_llm_status.setStyleSheet(f"font-size: 11px; color: {color}; background: transparent;")
 
     def _launch_health_check(self, snapshot: dict):
-        if self._health_worker and self._health_worker.isRunning():
+        if is_worker_running(self._health_worker):
             return
         self._health_worker = TaskWorker(
             lambda: _probe_llm_health(snapshot),
@@ -147,7 +154,7 @@ def _probe_llm_health(snapshot: dict) -> bool:
     import httpx
 
     try:
-        with httpx.Client(timeout=3) as client:
+        with httpx.Client(timeout=3, proxy=snapshot.get("proxy_url") or None, trust_env=True) as client:
             if snapshot["provider"] == "ollama":
                 resp = client.get(f"{snapshot['url']}/api/tags")
                 return resp.status_code == 200

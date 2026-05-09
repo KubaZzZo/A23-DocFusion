@@ -26,11 +26,7 @@ class ProviderHealthChecker:
             return ProviderHealthResult(False, f"{profile.label} API Key 未配置", url, [])
 
         try:
-            response = self.http_get(
-                url,
-                headers={"Authorization": f"Bearer {profile.api_key}"},
-                timeout=self.timeout,
-            )
+            response = self._get(url, profile)
             response.raise_for_status()
             try:
                 payload = response.json()
@@ -45,6 +41,13 @@ class ProviderHealthChecker:
             return ProviderHealthResult(True, "连接正常", url, models)
         except Exception as e:
             return ProviderHealthResult(False, self._classify_error(e), url, [])
+
+    def _get(self, url: str, profile: ProviderProfile):
+        headers = {"Authorization": f"Bearer {profile.api_key}"}
+        if profile.proxy_url:
+            with httpx.Client(proxy=profile.proxy_url, timeout=self.timeout, trust_env=True) as client:
+                return client.get(url, headers=headers)
+        return self.http_get(url, headers=headers, timeout=self.timeout)
 
     @staticmethod
     def _classify_error(error: Exception) -> str:

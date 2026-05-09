@@ -82,3 +82,39 @@ def test_provider_health_handles_non_json_success():
     assert result.ok is True
     assert result.models == []
     assert "未返回 JSON" in result.message
+
+
+def test_provider_health_uses_proxy_client_when_proxy_is_configured(monkeypatch):
+    calls = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            calls["kwargs"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            calls["url"] = url
+            calls["headers"] = headers
+            return FakeResponse({"data": [{"id": "m1"}]})
+
+    profile = build_provider_profile(
+        {
+            "vendor": "openai",
+            "api_key": "key",
+            "base_url": "https://api.example.com/v1",
+            "model": "",
+            "proxy_url": "http://127.0.0.1:17890",
+        }
+    )
+    monkeypatch.setattr("llm.provider_health.httpx.Client", FakeClient)
+
+    result = ProviderHealthChecker().check_openai_compatible(profile)
+
+    assert result.ok is True
+    assert calls["kwargs"]["proxy"] == "http://127.0.0.1:17890"
+    assert calls["url"].endswith("/models")

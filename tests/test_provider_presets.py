@@ -40,7 +40,7 @@ def test_extract_model_names_supports_common_provider_payloads():
 
 def test_build_provider_profile_merges_runtime_config_with_preset_metadata():
     profile = build_provider_profile(
-        {"vendor": "qwen", "api_key": "key", "base_url": "", "model": ""}
+        {"vendor": "qwen", "api_key": "key", "base_url": "", "model": "", "proxy_url": "http://127.0.0.1:17890"}
     )
 
     assert profile.vendor == "qwen"
@@ -49,3 +49,4 @@ def test_build_provider_profile_merges_runtime_config_with_preset_metadata():
     assert profile.api_key == "key"
     assert profile.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert profile.model == "qwen-plus"
+    assert profile.proxy_url == "http://127.0.0.1:17890"

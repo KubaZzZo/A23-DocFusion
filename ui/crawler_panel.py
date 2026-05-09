@@ -13,7 +13,7 @@ from config import CRAWLED_DIR
 from db.database import CrawledArticleDAO, EntityDAO, DocumentDAO
 from ui.components import apply_panel_density, mark_secondary, set_log_height
 from ui.crawler_task_adapter import CrawlerTaskAdapter
-from ui.task_runner import ProgressTaskWorker, TaskWorker
+from ui.task_runner import ProgressTaskWorker, TaskWorker, is_worker_running
 from logger import get_logger
 
 log = get_logger("ui.crawler_panel")
@@ -236,7 +236,7 @@ class CrawlerPanel(QWidget):
         QMessageBox.critical(self, "爬取失败", msg)
 
     def _generate_docs(self):
-        if getattr(self, "gen_worker", None) and self.gen_worker.isRunning():
+        if is_worker_running(getattr(self, "gen_worker", None)):
             return
 
         if not self.crawled_articles:
@@ -311,12 +311,21 @@ class CrawlerPanel(QWidget):
         self.import_worker.start()
 
     def _cancel_import(self):
-        if hasattr(self, "import_worker") and self.import_worker.isRunning():
+        if is_worker_running(getattr(self, "import_worker", None)):
             self.import_worker.requestInterruption()
             self.btn_import.setEnabled(False)
             self.btn_import.setText("取消中...")
             self.lbl_status.setText("正在取消导入...")
             self._log("用户取消导入")
+
+    def _on_import_progress_event(self, event: dict):
+        current = int(event.get("current", 0) or 0)
+        total = int(event.get("total", len(self.crawled_articles)) or len(self.crawled_articles) or 0)
+        total = max(total, 1)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, total)
+        self.progress.setValue(min(current, total))
+        self.lbl_status.setText(f"正在导入: {current}/{total}")
 
     @staticmethod
     def _run_import_task(articles: list[dict], progress, should_cancel=None) -> dict:

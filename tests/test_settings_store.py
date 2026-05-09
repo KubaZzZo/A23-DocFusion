@@ -26,6 +26,7 @@ def test_settings_store_round_trips_encoded_api_key():
         "provider": "openai",
         "openai_key": encode_key("secret-key"),
         "openai_url": "https://api.example.com/v1",
+        "openai_proxy": "http://127.0.0.1:17890",
         "openai_model": "demo-model",
     }
 
@@ -53,7 +54,7 @@ def test_apply_settings_updates_runtime_config_without_ui_imports():
     runtime_config = {
         "provider": "ollama",
         "ollama": {"base_url": "http://localhost:11434", "model": "qwen2.5:7b"},
-        "openai": {"vendor": "openai", "api_key": "", "api_key_ref": "", "base_url": "", "model": ""},
+        "openai": {"vendor": "openai", "api_key": "", "api_key_ref": "", "base_url": "", "model": "", "proxy_url": ""},
     }
 
     apply_settings(
@@ -64,6 +65,7 @@ def test_apply_settings_updates_runtime_config_without_ui_imports():
             "openai_vendor": "deepseek",
             "openai_key": encode_key("cloud-key"),
             "openai_url": "https://api.deepseek.com/v1",
+            "openai_proxy": "http://127.0.0.1:17890",
             "openai_model": "deepseek-chat",
         },
         runtime_config,
@@ -75,6 +77,7 @@ def test_apply_settings_updates_runtime_config_without_ui_imports():
     assert runtime_config["openai"]["api_key"] == ""
     assert runtime_config["openai"]["api_key_ref"].startswith("dpapi:")
     assert runtime_config["openai"]["model"] == "deepseek-chat"
+    assert runtime_config["openai"]["proxy_url"] == "http://127.0.0.1:17890"
 
 
 def test_apply_settings_default_runtime_config_is_none():

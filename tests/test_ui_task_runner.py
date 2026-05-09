@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtWidgets import QPushButton, QProgressBar, QApplication
 
-from ui.task_runner import ProgressTaskWorker, TaskWorker
+from ui.task_runner import ProgressTaskWorker, TaskWorker, is_worker_running
 
 _APP = None
 
@@ -113,6 +113,15 @@ def test_progress_task_worker_emits_failed_for_raised_exception():
     assert received == ["progress boom"]
 
 
+def test_is_worker_running_tolerates_deleted_qt_wrappers():
+    class DeletedWorker:
+        def isRunning(self):
+            raise RuntimeError("wrapped C/C++ object of type TaskWorker has been deleted")
+
+    assert not is_worker_running(None)
+    assert not is_worker_running(DeletedWorker())
+
+
 def test_ui_error_callback_can_restore_button_and_progress_state():
     _qt_app()
     button = QPushButton("执行中...")
@@ -140,11 +149,10 @@ def test_doc_panel_uses_shared_task_worker_for_command_execution():
 
     assert "from core.document_workflow import DocumentWorkflow" in source
     assert "safe_copy" not in source
-    assert "from ui.task_runner import TaskWorker" in source
+    assert "from ui.task_runner import TaskWorker, is_worker_running" in source
     assert "CommandWorker" not in source
     assert "self.worker = TaskWorker(" in source
-    assert 'getattr(self, "worker", None)' in source
-    assert "self.worker.isRunning()" in source
+    assert 'is_worker_running(getattr(self, "worker", None))' in source
     assert "self.worker.succeeded.connect(self._on_command_done)" in source
     assert "self.worker.failed.connect(self._on_command_error)" in source
 
@@ -180,9 +188,10 @@ def test_fill_panel_reuses_upload_template_analysis():
 def test_dashboard_panel_uses_shared_task_worker_for_entity_qa():
     source = Path("ui/dashboard_panel.py").read_text(encoding="utf-8")
 
-    assert "from ui.task_runner import TaskWorker" in source
+    assert "from ui.task_runner import TaskWorker, is_worker_running" in source
     assert "EntityQAWorker" not in source
     assert "self.refresh_worker = TaskWorker(" in source
+    assert 'is_worker_running(getattr(self, "refresh_worker", None))' in source
     assert "self.refresh_worker.succeeded.connect(self._render_snapshot)" in source
     assert "self.search_worker = TaskWorker(" in source
     assert "self.search_worker.succeeded.connect(self._render_entity_search_results)" in source
@@ -206,13 +215,12 @@ def test_extract_panel_uses_shared_task_worker_for_single_extract():
     assert "from core.document_workflow import DocumentWorkflow" in source
     assert "safe_copy" not in source
     assert "class ExtractWorker" not in source
-    assert "from ui.task_runner import ProgressTaskWorker, TaskWorker" in source
+    assert "from ui.task_runner import ProgressTaskWorker, TaskWorker, is_worker_running" in source
     assert "class BatchExtractWorker" not in source
     assert "self.batch_worker = ProgressTaskWorker(" in source
     assert "self.batch_worker.progress.connect(self._on_batch_progress_event)" in source
     assert "self.worker = TaskWorker(" in source
-    assert 'getattr(self, "worker", None)' in source
-    assert "self.worker.isRunning()" in source
+    assert 'is_worker_running(getattr(self, "worker", None))' in source
     assert "doc_id = self.current_doc.id if self.current_doc else None" in source
     assert "lambda: self._run_extract_task(text, doc_id)" in source
     assert "EntityDAO.create_batch(result_doc_id, entities)" in source
@@ -236,7 +244,7 @@ def test_crawler_panel_uses_shared_task_worker_for_document_generation():
     assert "from core.document_workflow import DocumentWorkflow" in source
     assert "file_path.write_text" not in source
     assert "DocumentDAO.create" not in source
-    assert "from ui.task_runner import ProgressTaskWorker, TaskWorker" in source
+    assert "from ui.task_runner import ProgressTaskWorker, TaskWorker, is_worker_running" in source
     assert "class DocGenWorker" not in source
     assert "CrawlWorker" in source
     assert "self.news_spider = NewsSpider()" in source
@@ -245,8 +253,9 @@ def test_crawler_panel_uses_shared_task_worker_for_document_generation():
     assert "class ImportWorker" not in source
     assert "self.import_worker = ProgressTaskWorker(" in source
     assert "self.import_worker.progress.connect(self._on_import_progress_event)" in source
+    assert "def _on_import_progress_event(self, event: dict):" in source
     assert "self.gen_worker = TaskWorker(" in source
-    assert 'getattr(self, "gen_worker", None)' in source
-    assert "self.gen_worker.isRunning()" in source
+    assert 'is_worker_running(getattr(self, "gen_worker", None))' in source
+    assert 'is_worker_running(getattr(self, "import_worker", None))' in source
     assert "self.gen_worker.succeeded.connect(self._on_gen_done)" in source
     assert "self.gen_worker.failed.connect(self._on_gen_error)" in source

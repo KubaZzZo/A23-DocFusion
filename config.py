@@ -59,6 +59,7 @@ LLM_CONFIG = {
         "api_key_ref": "",
         "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "proxy_url": os.getenv("OPENAI_PROXY_URL", ""),
     },
 }
 

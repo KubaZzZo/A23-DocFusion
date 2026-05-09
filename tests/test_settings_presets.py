@@ -1,4 +1,6 @@
 """Settings dialog cloud vendor preset tests."""
+from pathlib import Path
+
 from llm.provider_health import ProviderHealthResult
 from ui.settings_dialog import (
     CLOUD_VENDOR_PRESETS,
@@ -53,3 +55,12 @@ def test_format_provider_health_message_without_models():
     result = ProviderHealthResult(True, "兼容接口已响应，但未返回 JSON", "https://api.example.com/v1/models", [])
 
     assert _format_provider_health_message("测试供应商", result) == "测试供应商 连接正常\n兼容接口已响应，但未返回 JSON"
+
+
+def test_settings_dialog_reloads_saved_api_key_instead_of_clearing_it():
+    source = Path("ui/settings_dialog.py").read_text(encoding="utf-8")
+    load_current = source[source.index("    def _load_current"):source.index("    def _apply_vendor_preset")]
+
+    assert 'encoded_key = LLM_CONFIG["openai"].get("api_key_ref", "")' in load_current
+    assert 'self.openai_key.setText(_decode_key(encoded_key) if encoded_key else "")' in load_current
+    assert "self.openai_key.clear()" not in load_current

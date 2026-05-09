@@ -30,7 +30,7 @@ from llm import get_llm
 from logger import get_logger
 from ui.components import EmptyState, mark_secondary
 from ui.dashboard_view_model import build_dashboard_snapshot
-from ui.task_runner import TaskWorker
+from ui.task_runner import TaskWorker, is_worker_running
 
 log = get_logger("ui.dashboard_panel")
 
@@ -382,7 +382,7 @@ class DashboardPanel(QWidget):
         layout.addWidget(splitter, 1)
 
     def refresh(self):
-        if getattr(self, "refresh_worker", None) and self.refresh_worker.isRunning():
+        if is_worker_running(getattr(self, "refresh_worker", None)):
             return
         self.refresh_worker = TaskWorker(build_dashboard_snapshot, error_prefix="dashboard refresh")
         self.refresh_worker.succeeded.connect(self._render_snapshot)
@@ -391,6 +391,16 @@ class DashboardPanel(QWidget):
 
     def _on_refresh_error(self, msg: str):
         log.warning("刷新数据概览失败: %s", msg)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            child_widget = item.widget()
+            child_layout = item.layout()
+            if child_widget is not None:
+                child_widget.deleteLater()
+            elif child_layout is not None:
+                self._clear_layout(child_layout)
 
     def _render_snapshot(self, snapshot):
         docs = snapshot.docs

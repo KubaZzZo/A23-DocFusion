@@ -24,6 +24,7 @@ class ProviderProfile:
     api_key: str
     base_url: str
     model: str
+    proxy_url: str
 
 
 _PRESETS = [
@@ -53,6 +54,7 @@ def build_provider_profile(config: dict) -> ProviderProfile:
         api_key=config.get("api_key", ""),
         base_url=config.get("base_url") or preset["base_url"] or "https://api.openai.com/v1",
         model=config.get("model") or preset["model_placeholder"],
+        proxy_url=(config.get("proxy_url") or "").strip(),
     )
 
 

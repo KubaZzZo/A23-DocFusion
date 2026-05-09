@@ -12,7 +12,7 @@ from core.document_workflow import DocumentWorkflow
 from core.document_parser import DocumentParser
 from db.database import DocumentDAO
 from ui.components import apply_panel_density, mark_secondary, set_log_height
-from ui.task_runner import TaskWorker
+from ui.task_runner import TaskWorker, is_worker_running
 from logger import get_logger
 
 log = get_logger("ui.doc_panel")
@@ -110,7 +110,7 @@ class DocPanel(QWidget):
         self._log(f"已加载文档: {doc.filename}")
 
     def _execute_command(self):
-        if getattr(self, "worker", None) and self.worker.isRunning():
+        if is_worker_running(getattr(self, "worker", None)):
             return
 
         cmd = self.input_cmd.text().strip()

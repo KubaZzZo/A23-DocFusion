@@ -103,6 +103,9 @@ class SettingsDialog(QDialog):
         self.openai_url = QLineEdit()
         self.openai_url.setPlaceholderText("https://api.openai.com/v1")
         openai_form.addRow("Base URL:", self.openai_url)
+        self.openai_proxy = QLineEdit()
+        self.openai_proxy.setPlaceholderText("http://127.0.0.1:17890")
+        openai_form.addRow("统一代理地址:", self.openai_proxy)
         self.openai_model = QLineEdit()
         self.openai_model.setPlaceholderText("gpt-4o-mini")
         openai_form.addRow("模型名称:", self.openai_model)
@@ -128,8 +131,10 @@ class SettingsDialog(QDialog):
         vendor = LLM_CONFIG["openai"].get("vendor", "openai")
         index = self.openai_vendor.findData(vendor)
         self.openai_vendor.setCurrentIndex(index if index >= 0 else self.openai_vendor.findData("custom"))
-        self.openai_key.clear()
+        encoded_key = LLM_CONFIG["openai"].get("api_key_ref", "")
+        self.openai_key.setText(_decode_key(encoded_key) if encoded_key else "")
         self.openai_url.setText(LLM_CONFIG["openai"]["base_url"])
+        self.openai_proxy.setText(LLM_CONFIG["openai"].get("proxy_url", ""))
         self.openai_model.setText(LLM_CONFIG["openai"]["model"])
         self._apply_vendor_preset(self.openai_vendor.currentData(), preserve_values=True)
 
@@ -176,12 +181,12 @@ class SettingsDialog(QDialog):
                 "vendor": self.openai_vendor.currentData() or "openai",
                 "api_key": api_key,
                 "base_url": base_url,
+                "proxy_url": self.openai_proxy.text().strip(),
                 "model": self.openai_model.text().strip(),
             }
         )
         result = ProviderHealthChecker().check_openai_compatible(profile)
         if result.ok:
-            self.openai_key.clear()
             QMessageBox.information(self, "连接成功", _format_provider_health_message(vendor_label, result))
         else:
             QMessageBox.critical(
@@ -197,6 +202,7 @@ class SettingsDialog(QDialog):
         LLM_CONFIG["openai"]["vendor"] = self.openai_vendor.currentData() or "openai"
         LLM_CONFIG["openai"]["api_key"] = ""
         LLM_CONFIG["openai"]["base_url"] = self.openai_url.text().strip() or "https://api.openai.com/v1"
+        LLM_CONFIG["openai"]["proxy_url"] = self.openai_proxy.text().strip()
         LLM_CONFIG["openai"]["model"] = self.openai_model.text().strip() or "gpt-4o-mini"
         if api_key:
             LLM_CONFIG["openai"]["api_key_ref"] = _encode_key(api_key)
@@ -208,9 +214,9 @@ class SettingsDialog(QDialog):
             "openai_vendor": LLM_CONFIG["openai"]["vendor"],
             "openai_key": LLM_CONFIG["openai"].get("api_key_ref", ""),
             "openai_url": LLM_CONFIG["openai"]["base_url"],
+            "openai_proxy": LLM_CONFIG["openai"].get("proxy_url", ""),
             "openai_model": LLM_CONFIG["openai"]["model"],
         }
         save_settings(settings)
-        self.openai_key.clear()
         QMessageBox.information(self, "保存成功", "设置已保存并生效")
         self.accept()

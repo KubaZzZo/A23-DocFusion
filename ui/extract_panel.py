@@ -14,7 +14,7 @@ from core.document_workflow import DocumentWorkflow
 from core.entity_extractor import EntityExtractor
 from db.database import DocumentDAO, EntityDAO
 from ui.components import apply_panel_density, mark_danger, mark_secondary
-from ui.task_runner import ProgressTaskWorker, TaskWorker
+from ui.task_runner import ProgressTaskWorker, TaskWorker, is_worker_running
 
 ENTITY_COLORS = {
     "person":       ("#5B8DEF", "#EBF1FF", "人名"),
@@ -272,7 +272,7 @@ class ExtractPanel(QWidget):
             loop.close()
 
     def _start_extract(self, force: bool = False):
-        if getattr(self, "worker", None) and self.worker.isRunning():
+        if is_worker_running(getattr(self, "worker", None)):
             return
 
         doc_id = self.current_doc.id if self.current_doc else None

@@ -155,6 +155,8 @@ def apply_settings(settings: dict, runtime_config: dict | None = None):
         runtime_config["openai"]["base_url"] = settings["openai_url"]
     if "openai_model" in settings:
         runtime_config["openai"]["model"] = settings["openai_model"]
+    if "openai_proxy" in settings:
+        runtime_config["openai"]["proxy_url"] = settings["openai_proxy"]
 
 
 def apply_saved_settings(settings_file: Path | str = DEFAULT_SETTINGS_FILE, runtime_config: dict = LLM_CONFIG):

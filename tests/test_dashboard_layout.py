@@ -12,3 +12,8 @@ def test_dashboard_layout_source_contains_scrollable_expandable_sections():
     assert "self.txt_entity_answer.setMinimumHeight(120)" in source
     assert "QSizePolicy.Policy.Expanding" in source
     assert "right_splitter = QSplitter(Qt.Orientation.Vertical)" in source
+
+
+def test_dashboard_panel_defines_clear_layout_helper():
+    source = Path("ui/dashboard_panel.py").read_text(encoding="utf-8")
+    assert "def _clear_layout" in source

@@ -8,6 +8,20 @@ from logger import get_logger
 log = get_logger("ui.task_runner")
 
 
+def is_worker_running(worker: QThread | None) -> bool:
+    """Return whether a worker is still running, tolerating deleted Qt objects."""
+
+    if worker is None:
+        return False
+
+    try:
+        return worker.isRunning()
+    except RuntimeError:
+        # The Python wrapper can outlive the underlying Qt object briefly
+        # after deleteLater() runs. Treat that as "not running".
+        return False
+
+
 class TaskWorker(QThread):
     """Run a callable in a QThread and emit normalized success/error signals.
 
