@@ -377,6 +377,61 @@ class CrawlerPanel(QWidget):
         self._log(f"导入错误: {msg}")
         QMessageBox.critical(self, "导入失败", msg)
 
+    def _on_import_done(self, result):
+        self.progress.setVisible(False)
+        self._restore_import_button()
+        if isinstance(result, dict):
+            entity_count = result.get("entity_count", 0)
+            processed = result.get("processed", len(self.crawled_articles))
+            total = result.get("total", len(self.crawled_articles))
+            empty_content_count = result.get("empty_content_count", 0)
+            extract_failed_count = result.get("extract_failed_count", 0)
+            zero_entity_count = result.get("zero_entity_count", 0)
+            if result.get("cancelled"):
+                self.lbl_status.setText(f"导入已取消 {processed}/{total}")
+                self._log(
+                    "导入取消: "
+                    f"processed={processed}/{total}, entities={entity_count}, "
+                    f"empty={empty_content_count}, extract_failed={extract_failed_count}, zero_entities={zero_entity_count}"
+                )
+                QMessageBox.information(
+                    self,
+                    "已取消",
+                    (
+                        f"导入已取消\n已处理 {processed}/{total} 篇"
+                        f"\n导入实体 {entity_count} 个"
+                        f"\n正文为空 {empty_content_count} 篇"
+                        f"\n抽取失败 {extract_failed_count} 篇"
+                        f"\n无实体结果 {zero_entity_count} 篇"
+                    ),
+                )
+                return
+        else:
+            entity_count = result
+            empty_content_count = 0
+            extract_failed_count = 0
+            zero_entity_count = 0
+
+        self.lbl_status.setText(
+            f"导入完成，实体{entity_count}，空文本{empty_content_count}，抽取失败{extract_failed_count}"
+        )
+        self._log(
+            "导入完成: "
+            f"articles={len(self.crawled_articles)}, entities={entity_count}, "
+            f"empty={empty_content_count}, extract_failed={extract_failed_count}, zero_entities={zero_entity_count}"
+        )
+        QMessageBox.information(
+            self,
+            "完成",
+            (
+                f"共导入{len(self.crawled_articles)}篇文章"
+                f"\n实体数量 {entity_count} 个"
+                f"\n正文为空 {empty_content_count} 篇"
+                f"\n抽取失败 {extract_failed_count} 篇"
+                f"\n无实体结果 {zero_entity_count} 篇"
+            ),
+        )
+
     def _select_all(self):
         self.result_table.selectAll()
 

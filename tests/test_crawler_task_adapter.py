@@ -16,6 +16,34 @@ class FakeExtractor:
         return {"entities": [{"type": "person", "value": "Alice"}]}
 
 
+class ParseErrorExtractor:
+    async def extract(self, content: str) -> dict:
+        return {"parse_error": "model returned invalid payload", "entities": []}
+
+
+class EmptyEntityExtractor:
+    async def extract(self, content: str) -> dict:
+        return {"entities": []}
+
+
+class FakeSpider:
+    def __init__(self):
+        self.closed = False
+
+    def fetch_article_detail(self, article: dict) -> dict:
+        refreshed = dict(article)
+        refreshed["content"] = "refetched body"
+        return refreshed
+
+    def close(self):
+        self.closed = True
+
+
+class FailingSpider(FakeSpider):
+    def fetch_article_detail(self, article: dict) -> dict:
+        raise RuntimeError("detail fetch failed")
+
+
 class FakeDocumentDAO:
     docs = []
 
@@ -113,6 +141,7 @@ def make_adapter() -> CrawlerTaskAdapter:
         entity_dao=FakeEntityDAO,
         document_workflow_cls=FakeDocumentWorkflow,
         entity_extractor_cls=FakeExtractor,
+        spider_cls=FakeSpider,
         crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
         session_scope_factory=fake_session_scope,
     )
@@ -125,6 +154,46 @@ def make_failing_entity_adapter() -> CrawlerTaskAdapter:
         entity_dao=FailingEntityDAO,
         document_workflow_cls=FakeDocumentWorkflow,
         entity_extractor_cls=FakeExtractor,
+        spider_cls=FakeSpider,
+        crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
+        session_scope_factory=fake_session_scope,
+    )
+
+
+def make_parse_error_adapter() -> CrawlerTaskAdapter:
+    return CrawlerTaskAdapter(
+        article_dao=FakeArticleDAO,
+        document_dao=FakeDocumentDAO,
+        entity_dao=FakeEntityDAO,
+        document_workflow_cls=FakeDocumentWorkflow,
+        entity_extractor_cls=ParseErrorExtractor,
+        spider_cls=FakeSpider,
+        crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
+        session_scope_factory=fake_session_scope,
+    )
+
+
+def make_empty_entity_adapter() -> CrawlerTaskAdapter:
+    return CrawlerTaskAdapter(
+        article_dao=FakeArticleDAO,
+        document_dao=FakeDocumentDAO,
+        entity_dao=FakeEntityDAO,
+        document_workflow_cls=FakeDocumentWorkflow,
+        entity_extractor_cls=EmptyEntityExtractor,
+        spider_cls=FakeSpider,
+        crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
+        session_scope_factory=fake_session_scope,
+    )
+
+
+def make_missing_content_adapter(spider_cls=FakeSpider) -> CrawlerTaskAdapter:
+    return CrawlerTaskAdapter(
+        article_dao=FakeArticleDAO,
+        document_dao=FakeDocumentDAO,
+        entity_dao=FakeEntityDAO,
+        document_workflow_cls=FakeDocumentWorkflow,
+        entity_extractor_cls=FakeExtractor,
+        spider_cls=spider_cls,
         crawled_dir=Path("tests/.tmp_crawled") / uuid4().hex,
         session_scope_factory=fake_session_scope,
     )
@@ -147,7 +216,13 @@ def test_adapter_imports_articles_and_reports_progress():
 
     result = make_adapter().import_articles([make_article("one")], progress_events.append)
 
-    assert result == {"entity_count": 1, "processed": 1, "total": 1, "cancelled": False}
+    assert result["entity_count"] == 1
+    assert result["processed"] == 1
+    assert result["total"] == 1
+    assert result["cancelled"] is False
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 0
     assert progress_events == [{"current": 1, "total": 1}]
     assert len(FakeArticleDAO.articles) == 1
     assert len(FakeDocumentDAO.docs) == 1
@@ -180,7 +255,13 @@ def test_adapter_processes_multiple_articles_with_bounded_parallel_path():
         progress_events.append,
     )
 
-    assert result == {"entity_count": 3, "processed": 3, "total": 3, "cancelled": False}
+    assert result["entity_count"] == 3
+    assert result["processed"] == 3
+    assert result["total"] == 3
+    assert result["cancelled"] is False
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 0
     assert len(FakeDocumentDAO.docs) == 3
     assert len(FakeEntityDAO.batches) == 3
     assert progress_events[-1] == {"current": 3, "total": 3}
@@ -191,6 +272,76 @@ def test_adapter_rolls_back_document_when_entity_write_fails():
 
     result = make_failing_entity_adapter().import_articles([make_article("one")], progress_events.append)
 
-    assert result == {"entity_count": 0, "processed": 1, "total": 1, "cancelled": False}
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["total"] == 1
+    assert result["cancelled"] is False
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 1
+    assert result["zero_entity_count"] == 0
     assert FakeDocumentDAO.docs == []
     assert progress_events == [{"current": 1, "total": 1}]
+
+
+def test_adapter_reports_empty_content_separately():
+    progress_events = []
+
+    result = make_missing_content_adapter(FailingSpider).import_articles([make_article("empty", "")], progress_events.append)
+
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["empty_content_count"] == 1
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 0
+    assert progress_events == [{"current": 1, "total": 1}]
+
+
+def test_adapter_refetches_missing_content_before_extracting():
+    progress_events = []
+
+    result = make_missing_content_adapter().import_articles([make_article("empty", "")], progress_events.append)
+
+    assert result["entity_count"] == 1
+    assert result["processed"] == 1
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 0
+    assert result["refetched_content_count"] == 1
+    assert FakeDocumentDAO.docs[0].raw_text == "refetched body"
+
+
+def test_adapter_marks_missing_content_as_failed_when_refetch_fails():
+    progress_events = []
+
+    result = make_missing_content_adapter(FailingSpider).import_articles([make_article("empty", "")], progress_events.append)
+
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["empty_content_count"] == 1
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 0
+    assert result["refetched_content_count"] == 0
+
+
+def test_adapter_reports_parse_errors_separately():
+    progress_events = []
+
+    result = make_parse_error_adapter().import_articles([make_article("bad-model")], progress_events.append)
+
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 1
+    assert result["zero_entity_count"] == 0
+
+
+def test_adapter_reports_true_zero_entity_results_separately():
+    progress_events = []
+
+    result = make_empty_entity_adapter().import_articles([make_article("no-entities")], progress_events.append)
+
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 1

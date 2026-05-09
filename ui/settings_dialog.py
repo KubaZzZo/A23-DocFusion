@@ -1,4 +1,5 @@
 """LLM 设置对话框"""
+
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -37,7 +38,6 @@ log = get_logger("ui.settings_dialog")
 _normalize_models_url = normalize_models_url
 _extract_model_names = extract_model_names
 _probe_openai_compatible = probe_openai_compatible
-
 
 def _format_provider_health_message(vendor_label: str, result: ProviderHealthResult) -> str:
     if result.models:

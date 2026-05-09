@@ -128,7 +128,13 @@ def test_import_task_stores_crawled_article_as_real_file(monkeypatch):
     assert doc_path.read_text(encoding="utf-8") == article["content"]
     assert docs[0].raw_text == article["content"]
     assert FakeDocumentWorkflow.parse_calls == 0
-    assert result == {"entity_count": 0, "processed": 1, "total": 1, "cancelled": False}
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["total"] == 1
+    assert result["cancelled"] is False
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 1
     assert progress_events == [{"current": 1, "total": 1}]
 
 
@@ -199,5 +205,11 @@ def test_import_task_stops_when_cancel_requested_between_articles(monkeypatch):
 
     result = CrawlerPanel._run_import_task(articles, progress_events.append, cancel_after_first)
 
-    assert result == {"entity_count": 0, "processed": 1, "total": 2, "cancelled": True}
+    assert result["entity_count"] == 0
+    assert result["processed"] == 1
+    assert result["total"] == 2
+    assert result["cancelled"] is True
+    assert result["empty_content_count"] == 0
+    assert result["extract_failed_count"] == 0
+    assert result["zero_entity_count"] == 1
     assert len(FakeDocumentDAO.get_all()) in (1, 2)

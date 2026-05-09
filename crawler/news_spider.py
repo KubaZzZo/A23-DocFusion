@@ -1,17 +1,23 @@
-"""新闻爬虫核心逻辑 - 爬取公开新闻源"""
+"""新闻爬虫核心逻辑。"""
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+import json
+import random
 
 import httpx
 from bs4 import BeautifulSoup
-from datetime import datetime
-import re
-import random
+
 from logger import get_logger
 
 
 log = get_logger("crawler.news_spider")
 DETAIL_CONCURRENCY = 3
 
+BAIDU = "百度百家号"
+THEPAPER = "澎湃新闻"
+SINA = "新浪新闻"
+KR36 = "36氪"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -19,23 +25,22 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
 ]
 
-# 新闻源配置
 NEWS_SOURCES = {
-    "百度百家号": {
+    BAIDU: {
         "list_url": "https://baijiahao.baidu.com/u?app_id=1586447938468457",
-        "name": "百度百家号",
+        "name": BAIDU,
     },
-    "澎湃新闻": {
+    THEPAPER: {
         "list_url": "https://www.thepaper.cn/",
-        "name": "澎湃新闻",
+        "name": THEPAPER,
     },
-    "新浪新闻": {
+    SINA: {
         "list_url": "https://news.sina.com.cn/",
-        "name": "新浪新闻",
+        "name": SINA,
     },
-    "36氪": {
+    KR36: {
         "list_url": "https://36kr.com/newsflashes",
-        "name": "36氪",
+        "name": KR36,
     },
 }
 
@@ -73,6 +78,28 @@ class NewsSpider:
         return BeautifulSoup(resp.text, "lxml")
 
     @staticmethod
+    def _meta_content(soup: BeautifulSoup, name: str) -> str:
+        node = soup.select_one(f'meta[name="{name}"]') or soup.select_one(f'meta[property="{name}"]')
+        return (node.get("content", "").strip() if node else "")
+
+    @staticmethod
+    def _html_to_text(html: str) -> str:
+        if not html:
+            return ""
+        return BeautifulSoup(html, "lxml").get_text("\n", strip=True)
+
+    @staticmethod
+    def _extract_thepaper_next_data(soup: BeautifulSoup) -> dict:
+        node = soup.select_one("script#__NEXT_DATA__")
+        if not node or not node.string:
+            return {}
+        try:
+            data = json.loads(node.string)
+        except json.JSONDecodeError:
+            return {}
+        return (((data.get("props") or {}).get("pageProps") or {}).get("detailData") or {}).get("contentDetail") or {}
+
+    @staticmethod
     def _notify_progress(progress_cb, current: int, total: int, message: str = ""):
         if not progress_cb:
             return
@@ -82,18 +109,39 @@ class NewsSpider:
             progress_cb(current, total)
 
     def crawl(self, source_name: str, count: int = 10, progress_callback=None) -> list[dict]:
-        """爬取指定新闻源的文章列表"""
+        """爬取指定新闻源的文章列表。"""
         dispatch = {
-            "澎湃新闻": self._crawl_thepaper,
-            "新浪新闻": self._crawl_sina,
-            "36氪": self._crawl_36kr,
-            "百度百家号": self._crawl_baidu,
+            THEPAPER: self._crawl_thepaper,
+            SINA: self._crawl_sina,
+            KR36: self._crawl_36kr,
+            BAIDU: self._crawl_baidu,
         }
         fn = dispatch.get(source_name)
         if not fn:
             log.warning("不支持的新闻源: %s", source_name)
             return []
         return fn(count, progress_callback)
+
+    def fetch_article_detail(self, article: dict) -> dict:
+        source = article.get("source", "")
+        url = article.get("url", "")
+        if not url:
+            raise ArticleParseError("missing article url")
+
+        dispatch = {
+            THEPAPER: self._parse_thepaper_detail,
+            SINA: self._parse_sina_detail,
+            KR36: self._parse_36kr_detail,
+            BAIDU: self._parse_baidu_detail,
+        }
+        parser = dispatch.get(source)
+        if not parser:
+            raise ArticleParseError(f"unsupported article source: {source}")
+
+        detail = parser(url)
+        merged = dict(article)
+        merged.update(detail)
+        return merged
 
     def _crawl_source(
         self,
@@ -155,24 +203,23 @@ class NewsSpider:
     def _unique_links(nodes, count: int, min_title_len: int, url_builder, href_filter=None) -> list[tuple[str, str]]:
         seen = set()
         urls = []
-        for a in nodes:
-            href = a.get("href", "")
+        for node in nodes:
+            href = node.get("href", "")
             if not href or href in seen:
                 continue
             if href_filter and not href_filter(href):
                 continue
             seen.add(href)
-            title = a.get_text(strip=True)
+            title = node.get_text(strip=True)
             if title and len(title) > min_title_len:
                 urls.append((title, url_builder(href)))
             if len(urls) >= count:
                 break
         return urls
 
-    # ---- 澎湃新闻 ----
     def _crawl_thepaper(self, count: int, progress_cb=None) -> list[dict]:
         return self._crawl_source(
-            "澎湃新闻",
+            THEPAPER,
             "https://www.thepaper.cn/",
             count,
             self._parse_thepaper_list,
@@ -186,23 +233,31 @@ class NewsSpider:
             links,
             count,
             4,
-            lambda href: href if href.startswith("http") else f"https://www.thepaper.cn/{href}",
+            lambda href: href if href.startswith("http") else f"https://www.thepaper.cn/{href.lstrip('/')}",
         )
 
     def _parse_thepaper_detail(self, url: str) -> dict:
         soup = self._get_soup(url)
         content_div = soup.select_one(".news_txt") or soup.select_one(".index_cententWrap__Jv8jk")
+        next_data = self._extract_thepaper_next_data(soup)
         content = content_div.get_text("\n", strip=True) if content_div else ""
-        author_el = soup.select_one(".news_about .news_author") or soup.select_one(".ant-space-item")
-        author = author_el.get_text(strip=True) if author_el else ""
+        if not content:
+            content = self._html_to_text(next_data.get("content", ""))
+        if not content:
+            content = next_data.get("summary", "") or self._meta_content(soup, "description")
         date_el = soup.select_one(".news_about .news_time") or soup.select_one("time")
-        pub_date = date_el.get_text(strip=True) if date_el else datetime.now().strftime("%Y-%m-%d")
+        pub_date = date_el.get_text(strip=True) if date_el else ""
+        if not pub_date:
+            pub_date = next_data.get("pubTime", "") or datetime.now().strftime("%Y-%m-%d")
+        author_el = soup.select_one(".news_about .news_author")
+        author = author_el.get_text(strip=True) if author_el else ""
+        if not author or author == pub_date or any(ch.isdigit() for ch in author):
+            author = next_data.get("author", "") or author
         return {"content": content, "author": author, "publish_date": pub_date, "category": "新闻"}
 
-    # ---- 新浪新闻 ----
     def _crawl_sina(self, count: int, progress_cb=None) -> list[dict]:
         return self._crawl_source(
-            "新浪新闻",
+            SINA,
             "https://news.sina.com.cn/",
             count,
             self._parse_sina_list,
@@ -224,10 +279,9 @@ class NewsSpider:
         pub_date = date_el.get_text(strip=True) if date_el else datetime.now().strftime("%Y-%m-%d")
         return {"content": content, "author": author, "publish_date": pub_date, "category": "新闻"}
 
-    # ---- 36氪 ----
     def _crawl_36kr(self, count: int, progress_cb=None) -> list[dict]:
         return self._crawl_source(
-            "36氪",
+            KR36,
             "https://36kr.com/newsflashes",
             count,
             self._parse_36kr_list,
@@ -248,16 +302,17 @@ class NewsSpider:
         soup = self._get_soup(url)
         content_div = soup.select_one(".article-content") or soup.select_one(".common-width")
         content = content_div.get_text("\n", strip=True) if content_div else ""
+        if not content:
+            content = self._meta_content(soup, "description") or self._meta_content(soup, "og:description")
         author_el = soup.select_one(".article-title-author-name")
         author = author_el.get_text(strip=True) if author_el else ""
         date_el = soup.select_one(".title-icon-item time") or soup.select_one("time")
         pub_date = date_el.get_text(strip=True) if date_el else datetime.now().strftime("%Y-%m-%d")
         return {"content": content, "author": author, "publish_date": pub_date, "category": "科技"}
 
-    # ---- 百度百家号 ----
     def _crawl_baidu(self, count: int, progress_cb=None) -> list[dict]:
         return self._crawl_source(
-            "百度百家号",
+            BAIDU,
             "https://baijiahao.baidu.com/u?app_id=1586447938468457",
             count,
             self._parse_baidu_list,
