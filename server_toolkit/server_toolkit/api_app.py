@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, PlainTextResponse
 
+from server_toolkit.environment_tools import check_environment_tools
 from server_toolkit.runners import DockerRunner, LocalRunner
 from server_toolkit.task_queue import InMemoryTaskQueue
 from server_toolkit.task_service import TaskService
@@ -63,6 +64,10 @@ def create_app(
     @app.get("/healthz")
     async def healthz():
         return {"ok": True, "service": "docfusion-server-toolkit"}
+
+    @app.get("/api/server-tools", dependencies=[Depends(require_auth)])
+    async def server_tools():
+        return {"tools": check_environment_tools()}
 
     @app.post("/api/server-tasks", status_code=201, dependencies=[Depends(require_auth)])
     async def submit_task(

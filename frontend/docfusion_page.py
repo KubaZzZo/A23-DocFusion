@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from api_client import ApiError, DocFusionApiClient
 from crawler_service import crawl_articles, news_sources
+from server_task_client import ServerTaskClient, ServerTaskConfig, load_server_task_config, save_server_task_config
 from local_services import (
     batch_extract_documents,
     clear_and_reextract_document,
@@ -162,6 +163,10 @@ class DocFusionWindow(QMainWindow):
         self.selected_article_id: int | None = None
         self.latest_template_id: int | None = None
         self.latest_task_id: int | None = None
+        self.latest_server_task_id: str | None = None
+        self.server_task_files: list[Path] = []
+        self.server_task_config_path = Path.home() / ".docfusion" / "server-task.json"
+        self.server_task_config = load_server_task_config(self.server_task_config_path)
         self.api_process: subprocess.Popen | None = None
         self.source_checks: dict[str, QCheckBox] = {}
 
@@ -181,6 +186,7 @@ class DocFusionWindow(QMainWindow):
         self.stack.addWidget(self._workspace_page())
         self.stack.addWidget(self._document_page())
         self.stack.addWidget(self._fusion_page())
+        self.stack.addWidget(self._server_tasks_page())
         self.stack.addWidget(self._articles_page())
         self.stack.addWidget(self._settings_page())
         root.addWidget(self.stack, 1)
@@ -218,7 +224,7 @@ class DocFusionWindow(QMainWindow):
         divider.setStyleSheet(f"background: {CARD};")
         layout.addWidget(divider)
 
-        for index, label in enumerate(["工作台", "文档库", "融合流程", "文章库", "系统设置"]):
+        for index, label in enumerate(["工作台", "文档库", "融合流程", "服务器任务", "文章库", "系统设置"]):
             btn = NavButton(label)
             btn.clicked.connect(lambda checked=False, i=index: self._activate_nav(i))
             self.nav_buttons.append(btn)
@@ -803,6 +809,117 @@ class DocFusionWindow(QMainWindow):
         layout.addLayout(grid)
         return page
 
+    def _server_tasks_page(self) -> QWidget:
+        page, layout = self._page_shell()
+        layout.addWidget(self._header("服务器任务", ""))
+
+        config_panel = QFrame()
+        config_panel.setObjectName("paperPanel")
+        config_layout = QVBoxLayout(config_panel)
+        config_layout.setContentsMargins(22, 18, 22, 20)
+        config_layout.setSpacing(12)
+        config_layout.addWidget(self._panel_heading("连接配置", ""))
+
+        config_grid = QGridLayout()
+        config_grid.setHorizontalSpacing(14)
+        config_grid.setVerticalSpacing(10)
+        self.server_task_url_input = QLineEdit(self.server_task_config.base_url)
+        self.server_task_token_input = QLineEdit()
+        self.server_task_token_input.setText(self.server_task_config.token)
+        self.server_task_token_input.setEchoMode(QLineEdit.Password)
+        self.server_task_token_input.setPlaceholderText("Bearer token")
+        config_grid.addWidget(QLabel("服务器地址"), 0, 0)
+        config_grid.addWidget(self.server_task_url_input, 0, 1)
+        config_grid.addWidget(QLabel("Token"), 1, 0)
+        config_grid.addWidget(self.server_task_token_input, 1, 1)
+        config_layout.addLayout(config_grid)
+
+        config_actions = QHBoxLayout()
+        check = QPushButton("检测连接")
+        check.clicked.connect(self.check_server_task_health)
+        config_actions.addWidget(check)
+        save_config = QPushButton("保存配置")
+        save_config.setObjectName("secondary")
+        save_config.clicked.connect(self.save_server_task_settings)
+        config_actions.addWidget(save_config)
+        check_tools = QPushButton("检查工具")
+        check_tools.setObjectName("secondary")
+        check_tools.clicked.connect(self.check_server_task_tools)
+        config_actions.addWidget(check_tools)
+        config_actions.addStretch()
+        config_layout.addLayout(config_actions)
+        self.server_task_connection_label = QLabel("尚未检测服务器任务 API")
+        self.server_task_connection_label.setObjectName("muted")
+        self.server_task_connection_label.setWordWrap(True)
+        config_layout.addWidget(self.server_task_connection_label)
+        layout.addWidget(config_panel)
+
+        submit_panel = QFrame()
+        submit_panel.setObjectName("paperPanel")
+        submit_layout = QVBoxLayout(submit_panel)
+        submit_layout.setContentsMargins(22, 18, 22, 20)
+        submit_layout.setSpacing(12)
+        submit_layout.addWidget(self._panel_heading("自然语言任务", ""))
+
+        self.server_task_instruction = QPlainTextEdit()
+        self.server_task_instruction.setMinimumHeight(90)
+        self.server_task_instruction.setPlaceholderText("例如：convert this file to PDF / ocr then extract amount date vendor")
+        submit_layout.addWidget(self.server_task_instruction)
+
+        file_actions = QHBoxLayout()
+        add_files = QPushButton("选择文件")
+        add_files.clicked.connect(self.add_server_task_files)
+        file_actions.addWidget(add_files)
+        clear_files = QPushButton("清空文件")
+        clear_files.setObjectName("secondary")
+        clear_files.clicked.connect(self.clear_server_task_files)
+        file_actions.addWidget(clear_files)
+        file_actions.addStretch()
+        submit_layout.addLayout(file_actions)
+
+        self.server_task_files_label = QLabel("未选择文件")
+        self.server_task_files_label.setObjectName("muted")
+        self.server_task_files_label.setWordWrap(True)
+        submit_layout.addWidget(self.server_task_files_label)
+
+        run_actions = QHBoxLayout()
+        submit = QPushButton("提交任务")
+        submit.clicked.connect(self.submit_server_task)
+        run_actions.addWidget(submit)
+        refresh = QPushButton("刷新状态")
+        refresh.setObjectName("secondary")
+        refresh.clicked.connect(self.refresh_server_task_status)
+        run_actions.addWidget(refresh)
+        download = QPushButton("下载结果")
+        download.setObjectName("secondary")
+        download.clicked.connect(self.download_server_task_result)
+        run_actions.addWidget(download)
+        run_actions.addStretch()
+        submit_layout.addLayout(run_actions)
+        layout.addWidget(submit_panel)
+
+        result_panel = QFrame()
+        result_panel.setObjectName("darkPanel")
+        result_layout = QVBoxLayout(result_panel)
+        result_layout.setContentsMargins(20, 18, 20, 20)
+        result_layout.setSpacing(12)
+        title = QLabel("任务状态")
+        title.setStyleSheet(f"color: {INVERSE_TEXT}; font-size: 16px; font-weight: 650;")
+        result_layout.addWidget(title)
+        self.server_task_status_view = QPlainTextEdit()
+        self.server_task_status_view.setReadOnly(True)
+        self.server_task_status_view.setMinimumHeight(260)
+        self.server_task_status_view.setPlainText("等待提交服务器任务...")
+        self.server_task_status_view.setStyleSheet(
+            f"background: {INVERSE_ELEVATED}; color: {INVERSE_TEXT}; "
+            "border: 1px solid rgba(250,249,245,0.14); border-radius: 8px; "
+            "font-family: Consolas; font-size: 13px; padding: 12px;"
+        )
+        result_layout.addWidget(self.server_task_status_view)
+        layout.addWidget(result_panel)
+        layout.addStretch()
+        return page
+
     def _settings_page(self) -> QWidget:
         page, layout = self._page_shell()
         layout.addWidget(
@@ -1273,6 +1390,80 @@ class DocFusionWindow(QMainWindow):
             QMessageBox.information(self, "缺少任务", "还没有可查询的填充任务。")
             return
         self._run_api("查询任务", lambda: self.client.fill_status(self.latest_task_id), self._on_fill_status)
+
+    def check_server_task_health(self) -> None:
+        self._run_api("检测服务器任务", self._server_task_client().health, self._on_server_task_health)
+
+    def save_server_task_settings(self) -> None:
+        config = ServerTaskConfig(
+            base_url=self.server_task_url_input.text().strip(),
+            token=self.server_task_token_input.text().strip(),
+        )
+        save_server_task_config(config, self.server_task_config_path)
+        self.server_task_config = config
+        self.server_task_connection_label.setText(f"服务器任务配置已保存：{self.server_task_config_path}")
+        self.log(f"服务器任务配置已保存：{self.server_task_config_path}")
+
+    def check_server_task_tools(self) -> None:
+        self._run_api("检查服务器工具", self._server_task_client().tools, self._on_server_task_tools)
+
+    def add_server_task_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择服务器任务文件",
+            str(Path.home()),
+            "Documents (*.docx *.xlsx *.pptx *.pdf *.txt *.md *.html *.csv *.jpg *.jpeg *.png *.tiff);;All files (*.*)",
+        )
+        if not files:
+            return
+        known = {path.resolve() for path in self.server_task_files}
+        for file_name in files:
+            path = Path(file_name)
+            if path.resolve() not in known:
+                self.server_task_files.append(path)
+                known.add(path.resolve())
+        self._render_server_task_files()
+
+    def clear_server_task_files(self) -> None:
+        self.server_task_files.clear()
+        self._render_server_task_files()
+
+    def submit_server_task(self) -> None:
+        instruction = self.server_task_instruction.toPlainText().strip()
+        if not instruction:
+            QMessageBox.information(self, "缺少指令", "请先输入自然语言任务指令。")
+            return
+        if not self.server_task_files:
+            QMessageBox.information(self, "缺少文件", "请先选择要上传到服务器的文件。")
+            return
+        self._run_api(
+            "提交服务器任务",
+            lambda: self._server_task_client().submit_instruction(instruction, self.server_task_files),
+            self._on_server_task_submitted,
+        )
+
+    def refresh_server_task_status(self) -> None:
+        if not self.latest_server_task_id:
+            QMessageBox.information(self, "缺少任务", "还没有可查询的服务器任务。")
+            return
+        self._run_api(
+            "刷新服务器任务",
+            lambda: self._server_task_client().task_status(self.latest_server_task_id),
+            self._on_server_task_status,
+        )
+
+    def download_server_task_result(self) -> None:
+        if not self.latest_server_task_id:
+            QMessageBox.information(self, "缺少任务", "还没有可下载的服务器任务。")
+            return
+        directory = QFileDialog.getExistingDirectory(self, "选择下载目录", str(Path.home()))
+        if not directory:
+            return
+        self._run_api(
+            "下载服务器任务结果",
+            lambda: self._server_task_client().download_result(self.latest_server_task_id, directory),
+            lambda path: self._on_server_task_downloaded(Path(path)),
+        )
 
     def load_selected_article_detail(self) -> None:
         if not self.selected_article_id:
@@ -1791,6 +1982,45 @@ class DocFusionWindow(QMainWindow):
             f"任务 #{data.get('task_id')}：{data.get('status')}，准确率：{data.get('accuracy')}，输出：{data.get('result_path')}"
         )
         self.log(f"填充任务状态：{self._pretty(data)}")
+
+    def _on_server_task_health(self, data: dict[str, Any]) -> None:
+        self.server_task_connection_label.setText(f"连接正常：{data}")
+        self.log(f"服务器任务健康检查：{self._pretty(data)}")
+
+    def _on_server_task_tools(self, data: dict[str, Any]) -> None:
+        self.server_task_connection_label.setText("服务器工具检查完成")
+        self.server_task_status_view.setPlainText(self._pretty(data))
+        self.log(f"服务器工具检查：{self._pretty(data)}")
+
+    def _on_server_task_submitted(self, data: dict[str, Any]) -> None:
+        self.latest_server_task_id = str(data.get("task_id") or "")
+        self._on_server_task_status(data)
+        if self.latest_server_task_id:
+            QTimer.singleShot(1200, self.refresh_server_task_status)
+
+    def _on_server_task_status(self, data: dict[str, Any]) -> None:
+        self.latest_server_task_id = str(data.get("task_id") or self.latest_server_task_id or "")
+        self.server_task_status_view.setPlainText(self._pretty(data))
+        status = data.get("status")
+        self.log(f"服务器任务 {self.latest_server_task_id or '-'}：{status}")
+        if status in {"queued", "running"}:
+            QTimer.singleShot(1500, self.refresh_server_task_status)
+
+    def _on_server_task_downloaded(self, path: Path) -> None:
+        self.server_task_status_view.appendPlainText(f"\nDownloaded: {path}")
+        self.log(f"服务器任务结果已下载：{path}")
+
+    def _server_task_client(self) -> ServerTaskClient:
+        return ServerTaskClient(
+            self.server_task_url_input.text().strip(),
+            self.server_task_token_input.text().strip(),
+        )
+
+    def _render_server_task_files(self) -> None:
+        if not self.server_task_files:
+            self.server_task_files_label.setText("未选择文件")
+            return
+        self.server_task_files_label.setText("\n".join(str(path) for path in self.server_task_files))
 
     def _on_api_error(self, action: str, message: str) -> None:
         self.api_status_tag.setText("后端未就绪")
