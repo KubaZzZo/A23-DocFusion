@@ -165,8 +165,9 @@ class DocFusionWindow(QMainWindow):
         self.latest_task_id: int | None = None
         self.latest_server_task_id: str | None = None
         self.server_task_files: list[Path] = []
+        self.server_task_defaults_path = Path(__file__).resolve().parent / "server_task.defaults.json"
         self.server_task_config_path = Path.home() / ".docfusion" / "server-task.json"
-        self.server_task_config = load_server_task_config(self.server_task_config_path)
+        self.server_task_config = load_server_task_config(self.server_task_config_path, self.server_task_defaults_path)
         self.api_process: subprocess.Popen | None = None
         self.source_checks: dict[str, QCheckBox] = {}
 

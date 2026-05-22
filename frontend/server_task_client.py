@@ -26,16 +26,11 @@ class ServerTaskConfig:
     token: str = ""
 
 
-def load_server_task_config(path: str | Path) -> ServerTaskConfig:
-    source = Path(path)
-    if not source.exists():
-        return ServerTaskConfig()
-    try:
-        payload = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ServerTaskConfig()
-    if not isinstance(payload, dict):
-        return ServerTaskConfig()
+def load_server_task_config(path: str | Path, defaults_path: str | Path | None = None) -> ServerTaskConfig:
+    payload: dict[str, Any] = {}
+    if defaults_path:
+        payload.update(_read_config_payload(defaults_path))
+    payload.update(_read_config_payload(path))
     return ServerTaskConfig(
         base_url=str(payload.get("base_url") or DEFAULT_SERVER_TASK_URL),
         token=str(payload.get("token") or ""),
@@ -46,6 +41,17 @@ def save_server_task_config(config: ServerTaskConfig, path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _read_config_payload(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    if not source.exists():
+        return {}
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 class ServerTaskClient:

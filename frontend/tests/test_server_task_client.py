@@ -28,3 +28,18 @@ def test_server_task_config_uses_defaults_for_missing_file(tmp_path):
 
     assert loaded.base_url == "http://186.241.72.140:8010"
     assert loaded.token == ""
+
+
+def test_server_task_config_loads_project_defaults_before_user_overrides(tmp_path):
+    defaults = tmp_path / "defaults.json"
+    user = tmp_path / "user.json"
+    defaults.write_text(
+        json.dumps({"base_url": "http://project.example:8010", "token": ""}),
+        encoding="utf-8",
+    )
+    user.write_text(json.dumps({"token": "local-secret"}), encoding="utf-8")
+
+    loaded = load_server_task_config(user, defaults)
+
+    assert loaded.base_url == "http://project.example:8010"
+    assert loaded.token == "local-secret"
