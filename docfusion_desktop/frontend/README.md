@@ -19,4 +19,4 @@ can connect to an already running backend at `http://127.0.0.1:8000/api`.
 - Uses the existing backend modules for documents, entities, templates,
   articles, crawling, and LLM provider settings.
 - Keeps the legacy `ui/` folder unchanged.
-- Stores runtime data in the existing project `data/` folder.
+- Stores runtime data in the bundled backend `data/` folder.
