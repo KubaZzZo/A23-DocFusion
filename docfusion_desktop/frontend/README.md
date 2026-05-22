@@ -8,7 +8,7 @@ DocFusion backend project.
 From the repository root:
 
 ```powershell
-python .\qt_frontend_redesign\main.py
+python .\docfusion_desktop\frontend\main.py
 ```
 
 The frontend can start the local FastAPI backend from the settings page, or it
