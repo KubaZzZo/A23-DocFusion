@@ -1,5 +1,6 @@
 ﻿# UI
 PyQt6>=6.6.0
+PySide6>=6.6.0
 
 # 鏂囨。瑙ｆ瀽
 python-docx>=1.1.0
@@ -15,7 +16,8 @@ socksio>=1.0.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
 
-# 鏁版嵁搴?sqlalchemy>=2.0.25
+# 鏁版嵁搴?
+sqlalchemy>=2.0.25
 
 # OCR
 pytesseract>=0.3.10
