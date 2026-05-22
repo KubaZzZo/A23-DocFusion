@@ -31,10 +31,18 @@ class InMemoryTaskQueue:
         input_files: Iterable[str | Path],
         *,
         task_id: str,
+        priority: str = "normal",
+        timeout_seconds: int | None = None,
     ) -> SubmittedTask:
         if self._queue.full():
             raise RuntimeError("QUEUE_FULL")
-        submitted = self.service.submit(plan, input_files, task_id=task_id)
+        submitted = self.service.submit(
+            plan,
+            input_files,
+            task_id=task_id,
+            priority=priority,
+            timeout_seconds=timeout_seconds,
+        )
         self._idle.clear()
         self._queue.put_nowait(submitted.task_id)
         return submitted

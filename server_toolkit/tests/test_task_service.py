@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from server_toolkit.task_service import TaskService
 
@@ -162,3 +163,91 @@ def test_task_service_cancel_queued_task(tmp_path):
     service.cancel_task("task_1")
 
     assert service.get_status("task_1")["status"] == "cancelled"
+
+
+def test_task_service_records_metadata_and_progress(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("hello", encoding="utf-8")
+    service = TaskService(tmp_path / "tasks")
+
+    task = service.submit(
+        {
+            "level": "L1",
+            "requires_agent": False,
+            "inputs": ["input/source.txt"],
+            "outputs": ["output/result.txt"],
+            "timeout_seconds": 60,
+            "steps": [
+                {
+                    "id": "copy",
+                    "tool": "docfusion",
+                    "command": "copy",
+                    "args": {"input": "input/source.txt", "output": "output/result.txt"},
+                }
+            ],
+        },
+        [source],
+        task_id="task_1",
+        priority="high",
+        timeout_seconds=30,
+    )
+
+    queued = service.get_status(task.task_id)
+    assert queued["priority"] == "high"
+    assert queued["timeout_seconds"] == 30
+    assert queued["input_files"] == ["source.txt"]
+    assert queued["progress"] == {"current_step": 0, "total_steps": 1, "description": "queued"}
+
+    service.run_local(task.task_id)
+    completed = service.get_status(task.task_id)
+    assert completed["progress"] == {"current_step": 1, "total_steps": 1, "description": "completed"}
+
+
+def test_task_service_collects_specific_download_result(tmp_path):
+    service = TaskService(tmp_path / "tasks")
+    task = service.submit(
+        {
+            "level": "L1",
+            "requires_agent": False,
+            "inputs": [],
+            "outputs": ["output/a.txt", "output/b.txt"],
+            "timeout_seconds": 60,
+            "steps": [],
+        },
+        [],
+        task_id="task_1",
+    )
+    workspace = service.get_workspace(task.task_id)
+    (workspace.output_dir / "a.txt").write_text("a", encoding="utf-8")
+    (workspace.output_dir / "b.txt").write_text("b", encoding="utf-8")
+
+    result = service.collect_download(task.task_id, file_path="output/b.txt")
+
+    assert result.kind == "file"
+    assert result.path.name == "b.txt"
+
+
+def test_task_service_cleanup_expired_tasks(tmp_path):
+    service = TaskService(tmp_path / "tasks")
+    task = service.submit(
+        {
+            "level": "L1",
+            "requires_agent": False,
+            "inputs": [],
+            "outputs": [],
+            "timeout_seconds": 60,
+            "steps": [],
+        },
+        [],
+        task_id="task_old",
+    )
+    workspace = service.get_workspace(task.task_id)
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    status = service.get_status(task.task_id)
+    status.update({"status": "completed", "completed_at": old_time})
+    service._write_status(workspace, status)
+
+    removed = service.cleanup_expired_tasks()
+
+    assert removed == ["task_old"]
+    assert not workspace.root.exists()

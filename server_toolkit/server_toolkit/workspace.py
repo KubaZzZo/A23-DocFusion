@@ -65,7 +65,16 @@ def write_task_plan(workspace: TaskWorkspace, plan: dict[str, Any]) -> Path:
     return workspace.task_file
 
 
-def collect_results(workspace: TaskWorkspace) -> CollectedResult:
+def collect_results(workspace: TaskWorkspace, file_path: str | None = None) -> CollectedResult:
+    if file_path:
+        from server_toolkit.task_models import validate_workspace_path
+
+        safe_path = validate_workspace_path(file_path)
+        requested = workspace.root / safe_path
+        if not requested.is_file() or not requested.resolve().is_relative_to(workspace.output_dir.resolve()):
+            raise FileNotFoundError(f"output file not found: {file_path}")
+        return CollectedResult(kind="file", path=requested)
+
     files = [path for path in sorted(workspace.output_dir.rglob("*")) if path.is_file()]
     if not files:
         raise FileNotFoundError("no output files found")

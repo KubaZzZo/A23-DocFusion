@@ -12,8 +12,10 @@ It is intentionally independent from the existing desktop `backend/` and `fronte
 - a synchronous task service for submit/status/log/download flows
 - an in-memory background queue for non-blocking task submission
 - a minimal FastAPI app for `/api/server-tasks`
+- Bearer Token protection for task APIs
+- task metadata for priority, timeout, input files, outputs, and progress
 - a deterministic L1/L2 natural-language plan parser
-- local and Docker dry-run runner abstractions
+- local and Docker runner abstractions with dry-run, injected execution, failure, and timeout status handling
 - Codex L3 prompt/validation helpers
 - Docker worker command construction for L1/L2 and L3 workers
 - deterministic document tools for L1/L2 tasks
@@ -79,13 +81,32 @@ DELETE /api/server-tasks/{task_id} mark cancelled
 
 The current API submits to an in-memory background queue and executes with the local Python worker by default. Docker execution is represented by a dry-run runner until a server runtime is available.
 
+Task submission also accepts optional `priority` (`normal` or `high`) and `timeout` form fields. Status responses include `input_files`, `timeout_seconds`, and a small `progress` object for the client task panel.
+
+Downloads return a single output file directly, zip multiple output files by default, and support `?file=output/name.ext` to fetch one declared output file.
+
 ## Plan Parser and Runners
 
 `server_toolkit.plan_parser.parse_instruction()` maps clear L1/L2 natural-language requests into deterministic task plans. It supports simple conversion, merge, extract, and table analysis requests. Ambiguous requests raise `PLAN_UNRESOLVED` instead of falling through to an agent.
 
 `server_toolkit.runners.LocalRunner` runs the current Python worker. `DockerRunner(dry_run=True)` returns the Docker argv that would be used by a scheduler without starting Docker.
 
+`DockerRunner(dry_run=False)` can execute via an injected or subprocess command runner and maps return codes to `completed`/`failed` and timeouts to `timeout`. The API still defaults to the local runner until the production worker scheduler is explicitly enabled.
+
 `server_toolkit.agent` only provides L3 validation and prompt construction. Codex CLI is not invoked by default.
+
+## Cleanup Policy
+
+`TaskService.cleanup_expired_tasks()` implements the planned retention defaults:
+
+```text
+completed: 24h
+cancelled: 24h
+failed:    72h
+timeout:   72h
+```
+
+Server deployments should run this from a scheduler or maintenance endpoint later; it is not triggered automatically by the API yet.
 
 ## Layout
 

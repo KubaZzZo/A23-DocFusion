@@ -63,9 +63,13 @@ def create_app(
     async def submit_task(
         plan: Annotated[str | None, Form()] = None,
         instruction: Annotated[str | None, Form()] = None,
+        priority: Annotated[str, Form()] = "normal",
+        timeout: Annotated[int | None, Form()] = None,
         files: Annotated[list[UploadFile] | None, File()] = None,
     ):
         try:
+            if priority not in {"normal", "high"}:
+                raise _api_error(400, "INVALID_PRIORITY", "priority must be normal or high")
             temp_paths = []
             with tempfile.TemporaryDirectory() as temp_dir:
                 upload_files = files or []
@@ -94,7 +98,13 @@ def create_app(
                 else:
                     raise _api_error(400, "PLAN_UNRESOLVED", "plan or instruction is required")
                 task_id = f"task_{uuid.uuid4().hex[:12]}"
-                task = task_queue.submit(parsed_plan, temp_paths, task_id=task_id)
+                task = task_queue.submit(
+                    parsed_plan,
+                    temp_paths,
+                    task_id=task_id,
+                    priority=priority,
+                    timeout_seconds=timeout,
+                )
             return service.get_status(task.task_id)
         except json.JSONDecodeError as exc:
             raise HTTPException(400, f"invalid plan JSON: {exc}") from exc
@@ -142,9 +152,9 @@ def create_app(
         return PlainTextResponse(_format_sse(events), media_type="text/event-stream")
 
     @app.get("/api/server-tasks/{task_id}/download", dependencies=[Depends(require_auth)])
-    async def download_task_result(task_id: str):
+    async def download_task_result(task_id: str, file: str | None = None):
         try:
-            result = service.collect_download(task_id)
+            result = service.collect_download(task_id, file_path=file)
         except FileNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
         media_type = "application/zip" if result.kind == "zip" else "application/octet-stream"
@@ -170,6 +180,9 @@ def _api_error(status_code: int, code: str, message: str) -> HTTPException:
 
 def _format_sse(events: list[dict]) -> str:
     lines = []
+    lines.append("event: queued")
+    lines.append('data: {"event": "queued"}')
+    lines.append("")
     for event in events:
         event_name = _event_name(event.get("event"))
         lines.append(f"event: {event_name}")

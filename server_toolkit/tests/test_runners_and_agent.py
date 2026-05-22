@@ -46,6 +46,45 @@ def test_docker_runner_dry_run_returns_command(tmp_path):
     assert result.command[:2] == ["docker", "run"]
 
 
+def test_docker_runner_executes_command_and_marks_completed(tmp_path):
+    service = TaskService(tmp_path / "tasks")
+    service.submit(
+        {"level": "L1", "requires_agent": False, "inputs": [], "outputs": [], "timeout_seconds": 60, "steps": []},
+        [],
+        task_id="task_1",
+    )
+    calls = []
+
+    def fake_run(command, timeout):
+        calls.append((command, timeout))
+        return 0, "", ""
+
+    result = DockerRunner(service, dry_run=False, command_runner=fake_run).run("task_1")
+
+    assert result.success is True
+    assert calls[0][0][:2] == ["docker", "run"]
+    assert calls[0][1] == 60
+    assert service.get_status("task_1")["status"] == "completed"
+
+
+def test_docker_runner_timeout_marks_task_timeout(tmp_path):
+    service = TaskService(tmp_path / "tasks")
+    service.submit(
+        {"level": "L1", "requires_agent": False, "inputs": [], "outputs": [], "timeout_seconds": 60, "steps": []},
+        [],
+        task_id="task_1",
+    )
+
+    def fake_timeout(command, timeout):
+        raise TimeoutError("docker worker timed out")
+
+    result = DockerRunner(service, dry_run=False, command_runner=fake_timeout).run("task_1")
+
+    assert result.success is False
+    assert "timed out" in result.error
+    assert service.get_status("task_1")["status"] == "timeout"
+
+
 def test_validate_l3_plan_requires_agent_flag():
     plan = {"level": "L3", "requires_agent": False}
 

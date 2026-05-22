@@ -37,6 +37,8 @@ def test_api_submit_task_runs_and_returns_completed_status(tmp_path):
     task_id = payload["task_id"]
     status = _wait_for_status(client, task_id, "completed")
     assert status["output_files"] == ["output/result.txt"]
+    assert status["input_files"] == ["source.txt"]
+    assert status["progress"]["description"] == "completed"
 
 
 def test_api_get_status_and_logs(tmp_path):
@@ -68,6 +70,45 @@ def test_api_download_returns_result_file(tmp_path):
     assert response.status_code == 200
     assert response.content == b"hello"
     assert "attachment" in response.headers["content-disposition"]
+
+
+def test_api_download_returns_requested_output_file(tmp_path):
+    app = create_app(tmp_path / "tasks")
+    client = TestClient(app)
+    plan = {
+        "level": "L1",
+        "requires_agent": False,
+        "inputs": ["input/source.txt"],
+        "outputs": ["output/a.txt", "output/b.txt"],
+        "timeout_seconds": 60,
+        "steps": [
+            {
+                "id": "copy_a",
+                "tool": "docfusion",
+                "command": "copy",
+                "args": {"input": "input/source.txt", "output": "output/a.txt"},
+            },
+            {
+                "id": "copy_b",
+                "tool": "docfusion",
+                "command": "copy",
+                "args": {"input": "input/source.txt", "output": "output/b.txt"},
+            },
+        ],
+    }
+    response = client.post(
+        "/api/server-tasks",
+        data={"plan": json.dumps(plan)},
+        files=[("files", ("source.txt", b"hello", "text/plain"))],
+    )
+    task_id = response.json()["task_id"]
+    _wait_for_status(client, task_id, "completed")
+
+    download = client.get(f"/api/server-tasks/{task_id}/download?file=output/b.txt")
+
+    assert download.status_code == 200
+    assert download.content == b"hello"
+    assert 'filename="b.txt"' in download.headers["content-disposition"]
 
 
 def test_api_rejects_invalid_plan(tmp_path):
@@ -140,8 +181,24 @@ def test_api_events_returns_sse_text(tmp_path):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: queued" in response.text
     assert "event: step_started" in response.text
     assert "event: complete" in response.text
+
+
+def test_api_accepts_priority_and_timeout_metadata(tmp_path):
+    app = create_app(tmp_path / "tasks")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/server-tasks",
+        data={"plan": json.dumps(_copy_plan()), "priority": "high", "timeout": "30"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["priority"] == "high"
+    assert payload["timeout_seconds"] == 30
 
 
 def test_api_healthz_does_not_require_auth(tmp_path):
