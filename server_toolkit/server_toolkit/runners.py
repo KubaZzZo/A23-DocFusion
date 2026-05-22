@@ -45,6 +45,15 @@ class DockerRunner:
         status = self.service.get_status(task_id)
         command = build_docker_command(task_id, workspace, level=status["level"])
         if self.dry_run:
+            status.update(
+                {
+                    "status": "completed",
+                    "execution_backend": "docker-dry-run",
+                    "completed_at": self.service.now(),
+                    "error": None,
+                }
+            )
+            self.service._write_status(workspace, status)
             return DockerRunResult(success=True, command=command)
         status.update(
             {

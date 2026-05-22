@@ -5,14 +5,27 @@ from __future__ import annotations
 import queue
 import threading
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 
+from server_toolkit.runners import LocalRunner
 from server_toolkit.task_service import SubmittedTask, TaskService
 
 
+class TaskExecutor(Protocol):
+    def run(self, task_id: str) -> object:
+        ...
+
+
 class InMemoryTaskQueue:
-    def __init__(self, service: TaskService, max_concurrent_tasks: int = 1, task_queue_size: int = 20):
+    def __init__(
+        self,
+        service: TaskService,
+        max_concurrent_tasks: int = 1,
+        task_queue_size: int = 20,
+        executor: TaskExecutor | None = None,
+    ):
         self.service = service
+        self.executor = executor or LocalRunner(service)
         self.max_concurrent_tasks = max_concurrent_tasks
         self._queue: queue.Queue[str] = queue.Queue(maxsize=task_queue_size)
         self._workers: list[threading.Thread] = []
@@ -61,7 +74,7 @@ class InMemoryTaskQueue:
                 if status.get("status") != "cancelled":
                     with self._lock:
                         self._active += 1
-                    self.service.run_local(task_id)
+                    self.executor.run(task_id)
             finally:
                 with self._lock:
                     if self._active > 0:

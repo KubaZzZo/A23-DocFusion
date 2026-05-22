@@ -85,13 +85,21 @@ Task submission also accepts optional `priority` (`normal` or `high`) and `timeo
 
 Downloads return a single output file directly, zip multiple output files by default, and support `?file=output/name.ext` to fetch one declared output file.
 
+Execution backend selection is controlled by `DOCFUSION_EXECUTION_BACKEND`:
+
+```text
+local           Run the Python worker in the API container. This is the default.
+docker-dry-run  Build the Docker worker command and mark the flow complete without starting Docker.
+docker          Execute the Docker command through the runner. Use only when the host worker runtime is ready.
+```
+
 ## Plan Parser and Runners
 
 `server_toolkit.plan_parser.parse_instruction()` maps clear L1/L2 natural-language requests into deterministic task plans. It supports simple conversion, merge, extract, and table analysis requests. Ambiguous requests raise `PLAN_UNRESOLVED` instead of falling through to an agent.
 
 `server_toolkit.runners.LocalRunner` runs the current Python worker. `DockerRunner(dry_run=True)` returns the Docker argv that would be used by a scheduler without starting Docker.
 
-`DockerRunner(dry_run=False)` can execute via an injected or subprocess command runner and maps return codes to `completed`/`failed` and timeouts to `timeout`. The API still defaults to the local runner until the production worker scheduler is explicitly enabled.
+`DockerRunner(dry_run=False)` can execute via an injected or subprocess command runner and maps return codes to `completed`/`failed` and timeouts to `timeout`. The API still defaults to the local runner until `DOCFUSION_EXECUTION_BACKEND=docker` is explicitly enabled.
 
 `server_toolkit.agent` only provides L3 validation and prompt construction. Codex CLI is not invoked by default.
 

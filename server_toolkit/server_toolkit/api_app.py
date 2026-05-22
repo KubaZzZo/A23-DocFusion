@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, PlainTextResponse
 
+from server_toolkit.runners import DockerRunner, LocalRunner
 from server_toolkit.task_queue import InMemoryTaskQueue
 from server_toolkit.task_service import TaskService
 from server_toolkit.plan_parser import PlanUnresolvedError, parse_instruction
@@ -28,13 +29,17 @@ def create_app(
     max_concurrent_tasks: int = 1,
     task_queue_size: int = 20,
     bearer_token: str | None = None,
+    execution_backend: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DocFusion Server Toolkit API", version="0.1.0")
     service = TaskService(tasks_root)
+    backend = execution_backend or os.getenv("DOCFUSION_EXECUTION_BACKEND", "local")
+    executor = _build_executor(service, backend)
     task_queue = InMemoryTaskQueue(
         service,
         max_concurrent_tasks=max_concurrent_tasks,
         task_queue_size=task_queue_size,
+        executor=executor,
     )
     allowed = allowed_extensions or {"docx", "xlsx", "pptx", "pdf", "txt", "md", "html", "csv", "jpg", "jpeg", "png", "tiff"}
     token = bearer_token if bearer_token is not None else os.getenv("DOCFUSION_API_TOKEN")
@@ -176,6 +181,17 @@ def create_app(
 
 def _api_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code, {"error": {"code": code, "message": message, "detail": None}})
+
+
+def _build_executor(service: TaskService, backend: str):
+    normalized = backend.strip().lower()
+    if normalized == "local":
+        return LocalRunner(service)
+    if normalized == "docker-dry-run":
+        return DockerRunner(service, dry_run=True)
+    if normalized == "docker":
+        return DockerRunner(service, dry_run=False)
+    raise ValueError(f"unsupported execution backend: {backend}")
 
 
 def _format_sse(events: list[dict]) -> str:

@@ -17,4 +17,5 @@ app = create_app(
     max_total_size=int(os.getenv("DOCFUSION_MAX_TOTAL_SIZE", str(200 * 1024 * 1024))),
     max_concurrent_tasks=int(os.getenv("DOCFUSION_MAX_CONCURRENT_TASKS", "1")),
     task_queue_size=int(os.getenv("DOCFUSION_TASK_QUEUE_SIZE", "20")),
+    execution_backend=os.getenv("DOCFUSION_EXECUTION_BACKEND", "local"),
 )

@@ -47,6 +47,31 @@ def test_queue_cancel_queued_task_marks_cancelled(tmp_path):
     assert status["status"] == "cancelled"
 
 
+def test_queue_uses_injected_executor(tmp_path):
+    service = TaskService(tmp_path / "tasks")
+    calls = []
+
+    class FakeExecutor:
+        def run(self, task_id: str):
+            calls.append(task_id)
+            status = service.get_status(task_id)
+            status["status"] = "completed"
+            service._write_status(service.get_workspace(task_id), status)
+
+    queue = InMemoryTaskQueue(
+        service,
+        max_concurrent_tasks=1,
+        task_queue_size=2,
+        executor=FakeExecutor(),
+    )
+
+    queue.submit(_copy_plan(), [], task_id="task_1")
+    queue.wait_for_idle(timeout=5)
+
+    assert calls == ["task_1"]
+    assert service.get_status("task_1")["status"] == "completed"
+
+
 def _copy_plan() -> dict:
     return {
         "level": "L1",

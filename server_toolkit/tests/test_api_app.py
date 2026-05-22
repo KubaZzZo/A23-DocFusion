@@ -201,6 +201,21 @@ def test_api_accepts_priority_and_timeout_metadata(tmp_path):
     assert payload["timeout_seconds"] == 30
 
 
+def test_api_can_use_docker_dry_run_backend(tmp_path):
+    app = create_app(tmp_path / "tasks", execution_backend="docker-dry-run")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/server-tasks",
+        data={"plan": json.dumps(_copy_plan())},
+    )
+    task_id = response.json()["task_id"]
+    status = _wait_for_status(client, task_id, "completed")
+
+    assert response.status_code == 201
+    assert status["execution_backend"] == "docker-dry-run"
+
+
 def test_api_healthz_does_not_require_auth(tmp_path):
     app = create_app(tmp_path / "tasks", bearer_token="secret")
     client = TestClient(app)

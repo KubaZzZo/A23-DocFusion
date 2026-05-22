@@ -32,3 +32,31 @@ def test_parse_instruction_rejects_unresolved_request():
         assert "PLAN_UNRESOLVED" in str(exc)
     else:
         raise AssertionError("expected unresolved error")
+
+
+def test_parse_instruction_builds_format_then_convert_l2_plan():
+    plan = parse_instruction("format heading font SimHei 18 then convert to PDF", ["input/report.docx"])
+
+    assert plan["level"] == "L2"
+    assert plan["outputs"] == ["output/report.pdf"]
+    assert [step["command"] for step in plan["steps"]] == ["format-docx", "convert"]
+    assert plan["steps"][0]["args"]["heading_font"] == "SimHei"
+    assert plan["steps"][0]["args"]["heading_size"] == 18
+    assert plan["steps"][1]["args"]["input"] == "work/report_formatted.docx"
+
+
+def test_parse_instruction_builds_ocr_then_extract_l2_plan():
+    plan = parse_instruction("ocr then extract amount date vendor", ["input/invoice.png"])
+
+    assert plan["level"] == "L2"
+    assert plan["outputs"] == ["output/entities.json"]
+    assert [step["command"] for step in plan["steps"]] == ["ocr", "extract"]
+    assert plan["steps"][1]["args"]["schema"] == "amount,date,vendor"
+
+
+def test_parse_instruction_builds_merge_then_format_l2_plan():
+    plan = parse_instruction("merge these Word files and format heading font SimHei 16", ["input/a.docx", "input/b.docx"])
+
+    assert plan["level"] == "L2"
+    assert plan["outputs"] == ["output/merged.docx"]
+    assert [step["command"] for step in plan["steps"]] == ["merge", "format-docx"]
