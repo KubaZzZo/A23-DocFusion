@@ -1,0 +1,413 @@
+"""Natural-language document command parsing and execution."""
+import json
+import shutil
+from pathlib import Path
+from datetime import datetime
+from typing import Literal
+from docx import Document as DocxDocument
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from llm import get_llm
+from llm.base import strip_json_code_fence
+from llm.prompt_safety import UNTRUSTED_INPUT_NOTICE, wrap_untrusted_input
+from config import DATA_DIR
+
+BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_DIR.mkdir(exist_ok=True)
+
+COMMAND_PARSE_PROMPT = """You parse natural-language document editing requests into strict JSON commands.
+Supported actions:
+1. format - formatting changes: bold, italic, underline, font_size, font_name, color, alignment.
+2. edit - content edits: insert, delete, replace.
+3. extract - extract text, tables, or headings.
+4. find_replace - find and replace text.
+5. structure - add headings or paragraphs.
+
+Return only JSON in this shape:
+{
+  "action": "format|edit|extract|find_replace|structure",
+  "target": "paragraph|table_row|text|tables|headings|all",
+  "params": {},
+  "description": "short operation description"
+}
+
+Examples:
+Make the second paragraph bold -> {"action":"format","target":"paragraph","params":{"index":1,"bold":true},"description":"make paragraph 2 bold"}
+Replace every occurrence of company with enterprise -> {"action":"find_replace","target":"all","params":{"find":"company","replace":"enterprise"},"description":"replace text globally"}
+Extract all tables -> {"action":"extract","target":"tables","params":{},"description":"extract all tables"}
+"""
+
+
+class _StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FormatParams(_StrictModel):
+    target: Literal["paragraph", "table_row"] | None = None
+    index: int = Field(default=0, ge=0)
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    font_size: float | None = Field(default=None, gt=0)
+    font_name: str | None = None
+    color: tuple[int, int, int] | None = None
+    alignment: Literal["left", "center", "right", "justify"] | None = None
+
+    @model_validator(mode="after")
+    def _validate_color(self):
+        if self.color is not None and any(value < 0 or value > 255 for value in self.color):
+            raise ValueError("color must be three integers between 0 and 255")
+        return self
+
+
+class EditParams(_StrictModel):
+    operation: Literal["replace", "insert", "delete"] = "replace"
+    index: int | None = Field(default=None, ge=0)
+    text: str = ""
+
+    @model_validator(mode="after")
+    def _validate_required_fields(self):
+        if self.operation in {"replace", "delete"} and self.index is None:
+            raise ValueError("index must be a non-negative integer")
+        return self
+
+
+class FindReplaceParams(_StrictModel):
+    find: str = Field(min_length=1)
+    replace: str = ""
+
+
+class ExtractParams(_StrictModel):
+    target: Literal["text", "tables", "headings"] | None = None
+
+
+class StructureParams(_StrictModel):
+    operation: Literal["add_heading", "add_paragraph"] = "add_paragraph"
+    text: str = ""
+    level: int = Field(default=1, ge=1, le=9)
+
+
+class CommandSchema(_StrictModel):
+    action: Literal["format", "edit", "find_replace", "extract", "structure"]
+    target: str | None = None
+    params: dict = Field(default_factory=dict)
+    description: str = ""
+
+
+PARAM_SCHEMAS = {
+    "format": FormatParams,
+    "edit": EditParams,
+    "find_replace": FindReplaceParams,
+    "extract": ExtractParams,
+    "structure": StructureParams,
+}
+
+
+class DocCommander:
+    """Document command executor."""
+
+    def __init__(self, provider: str = None):
+        self.llm = get_llm(provider)
+
+    async def parse_command(self, user_input: str, doc_info: str = "") -> dict:
+        """Parse natural-language input into a command JSON object."""
+        messages = [
+            {"role": "system", "content": COMMAND_PARSE_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"{UNTRUSTED_INPUT_NOTICE}\n\n"
+                    f"document_info:\n{wrap_untrusted_input(doc_info)}\n\n"
+                    f"user_command:\n{wrap_untrusted_input(user_input)}"
+                ),
+            },
+        ]
+        result = await self.llm.chat(messages)
+        try:
+            cleaned = strip_json_code_fence(result)
+            parsed = json.loads(cleaned)
+            return self._normalize_command(user_input, parsed)
+        except json.JSONDecodeError:
+            return {"error": "指令解析失败", "raw": result}
+
+    @staticmethod
+    def _normalize_command(user_input: str, parsed: dict) -> dict:
+        """Normalize common LLM command variants."""
+        if not isinstance(parsed, dict):
+            return parsed
+
+        action = parsed.get("action")
+        target = parsed.get("target")
+        params = parsed.get("params", {})
+        description = parsed.get("description", "")
+        text = f"{user_input} {description}"
+
+        if (
+            action == "format"
+            and target == "paragraph"
+            and isinstance(params, dict)
+            and "index" in params
+            and ("行" in text or "row" in text.lower() or "table" in text.lower())
+        ):
+            parsed["target"] = "table_row"
+
+        return parsed
+
+    def execute(self, doc_path: str, command: dict) -> dict:
+        """Execute a validated document command and back up mutable operations."""
+        if Path(doc_path).suffix.lower() != ".docx":
+            return {"success": False, "message": "DocCommander currently supports only .docx files"}
+
+        validation_error = self._validate_command(command)
+        if validation_error:
+            return {"success": False, "message": validation_error}
+
+        action = command.get("action")
+        handlers = {
+            "format": self._handle_format,
+            "edit": self._handle_edit,
+            "find_replace": self._handle_find_replace,
+            "extract": self._handle_extract,
+            "structure": self._handle_structure,
+        }
+        handler = handlers.get(action)
+        if not handler:
+            return {"success": False, "message": f"Unsupported action: {action}"}
+
+        backup_path = None if action == "extract" else self._backup(doc_path)
+
+        try:
+            params = dict(command.get("params", {}))
+            if "target" in command and "target" not in params:
+                params["target"] = command["target"]
+            result = handler(doc_path, params)
+            if backup_path:
+                result["backup_path"] = str(backup_path)
+            return result
+        except Exception as e:
+            # Restore the original file when a mutable operation fails.
+            if backup_path and Path(backup_path).exists():
+                shutil.copyfile(backup_path, doc_path)
+                Path(doc_path).chmod(0o666)
+            return {"success": False, "message": str(e)}
+
+    @classmethod
+    def _validate_command(cls, command: dict) -> str:
+        """Validate LLM command output before any file mutation or backup."""
+        if not isinstance(command, dict):
+            return "command must be an object"
+
+        try:
+            parsed = CommandSchema.model_validate(command)
+            params = dict(parsed.params)
+            if parsed.target is not None and "target" not in params:
+                params["target"] = parsed.target
+            PARAM_SCHEMAS[parsed.action].model_validate(params)
+        except ValidationError as e:
+            return cls._format_validation_error(e)
+        except ValueError as e:
+            return str(e)
+        return ""
+
+    @staticmethod
+    def _format_validation_error(error: ValidationError) -> str:
+        first = error.errors()[0]
+        loc = ".".join(str(part) for part in first.get("loc", ()))
+        message = first.get("msg", "invalid command")
+        if first.get("type") == "extra_forbidden" and loc:
+            return f"{loc} is not allowed"
+        return f"{loc}: {message}" if loc else message
+
+    @staticmethod
+    def _backup(doc_path: str) -> Path:
+        """Create a backup file and return its path."""
+        src = Path(doc_path)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = BACKUP_DIR / f"{src.stem}_{timestamp}{src.suffix}"
+        shutil.copyfile(doc_path, backup_path)
+        backup_path.chmod(0o666)
+        return backup_path
+
+    def _handle_format(self, doc_path: str, params: dict) -> dict:
+        doc = DocxDocument(doc_path)
+        target = params.get("target", "paragraph")
+
+        if target == "table_row":
+            row_idx = params.get("index", 0)
+            tables = doc.tables
+            if not tables:
+                return {"success": False, "message": "No table is available for table-row formatting"}
+            first_table = tables[0]
+            if row_idx >= len(first_table.rows):
+                return {"success": False, "message": f"Table row index {row_idx} is out of range"}
+
+            for cell in first_table.rows[row_idx].cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        if "bold" in params:
+                            run.bold = params["bold"]
+                        if "italic" in params:
+                            run.italic = params["italic"]
+                        if "underline" in params:
+                            run.underline = params["underline"]
+                        if "font_size" in params:
+                            run.font.size = Pt(params["font_size"])
+                        if "font_name" in params:
+                            run.font.name = params["font_name"]
+                        if "color" in params:
+                            r, g, b = params["color"]
+                            run.font.color.rgb = RGBColor(r, g, b)
+                if "alignment" in params:
+                    align_map = {
+                        "left": WD_ALIGN_PARAGRAPH.LEFT,
+                        "center": WD_ALIGN_PARAGRAPH.CENTER,
+                        "right": WD_ALIGN_PARAGRAPH.RIGHT,
+                        "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+                    }
+                    for para in cell.paragraphs:
+                        para.alignment = align_map.get(params["alignment"], WD_ALIGN_PARAGRAPH.LEFT)
+
+            doc.save(doc_path)
+            return {"success": True, "message": f"Formatted table row {row_idx + 1}"}
+
+        idx = params.get("index", 0)
+        if idx >= len(doc.paragraphs):
+            return {"success": False, "message": f"Paragraph index {idx} is out of range"}
+
+        para = doc.paragraphs[idx]
+        for run in para.runs:
+            if "bold" in params:
+                run.bold = params["bold"]
+            if "italic" in params:
+                run.italic = params["italic"]
+            if "underline" in params:
+                run.underline = params["underline"]
+            if "font_size" in params:
+                run.font.size = Pt(params["font_size"])
+            if "font_name" in params:
+                run.font.name = params["font_name"]
+            if "color" in params:
+                r, g, b = params["color"]
+                run.font.color.rgb = RGBColor(r, g, b)
+
+        if "alignment" in params:
+            align_map = {"left": WD_ALIGN_PARAGRAPH.LEFT, "center": WD_ALIGN_PARAGRAPH.CENTER,
+                         "right": WD_ALIGN_PARAGRAPH.RIGHT, "justify": WD_ALIGN_PARAGRAPH.JUSTIFY}
+            para.alignment = align_map.get(params["alignment"], WD_ALIGN_PARAGRAPH.LEFT)
+
+        doc.save(doc_path)
+        return {"success": True, "message": "Formatting completed"}
+
+    def _handle_edit(self, doc_path: str, params: dict) -> dict:
+        doc = DocxDocument(doc_path)
+        op = params.get("operation", "replace")
+
+        if op == "replace" and "index" in params:
+            idx = params["index"]
+            if idx < len(doc.paragraphs):
+                doc.paragraphs[idx].text = params.get("text", "")
+        elif op == "insert":
+            doc.add_paragraph(params.get("text", ""))
+        elif op == "delete" and "index" in params:
+            idx = params["index"]
+            if idx < len(doc.paragraphs):
+                p = doc.paragraphs[idx]._element
+                p.getparent().remove(p)
+
+        doc.save(doc_path)
+        return {"success": True, "message": "Edit completed"}
+
+    def _handle_find_replace(self, doc_path: str, params: dict) -> dict:
+        doc = DocxDocument(doc_path)
+        find_text = params.get("find", "")
+        replace_text = params.get("replace", "")
+        count = 0
+        if not find_text:
+            return {"success": False, "message": "Find text cannot be empty"}
+
+        for para in doc.paragraphs:
+            if find_text not in para.text:
+                continue
+            count += self._replace_in_paragraph_runs(para, find_text, replace_text)
+
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        if find_text not in para.text:
+                            continue
+                        count += self._replace_in_paragraph_runs(para, find_text, replace_text)
+
+        doc.save(doc_path)
+        return {"success": True, "message": f"Replacement completed, {count} occurrence(s) replaced"}
+
+    @staticmethod
+    def _replace_in_paragraph_runs(para, find_text: str, replace_text: str) -> int:
+        """Replace text at run level while preserving unaffected run formatting."""
+        matches = []
+        full_text_parts = []
+        char_map = []
+
+        for run_idx, run in enumerate(para.runs):
+            for char_idx, ch in enumerate(run.text):
+                full_text_parts.append(ch)
+                char_map.append((run_idx, char_idx))
+
+        full_text = "".join(full_text_parts)
+        start = 0
+        while True:
+            index = full_text.find(find_text, start)
+            if index == -1:
+                break
+            matches.append((index, index + len(find_text)))
+            start = index + len(find_text)
+
+        for start_idx, end_idx in reversed(matches):
+            start_run_idx, start_char_idx = char_map[start_idx]
+            end_run_idx, end_char_idx = char_map[end_idx - 1]
+            start_run = para.runs[start_run_idx]
+
+            if start_run_idx == end_run_idx:
+                text = start_run.text
+                start_run.text = text[:start_char_idx] + replace_text + text[end_char_idx + 1:]
+                continue
+
+            start_run.text = start_run.text[:start_char_idx] + replace_text
+            for run_idx in range(start_run_idx + 1, end_run_idx):
+                para.runs[run_idx].text = ""
+            end_run = para.runs[end_run_idx]
+            end_run.text = end_run.text[end_char_idx + 1:]
+
+        return len(matches)
+
+    def _handle_extract(self, doc_path: str, params: dict) -> dict:
+        doc = DocxDocument(doc_path)
+        target = params.get("target", "text")
+
+        if target == "tables":
+            tables = []
+            for table in doc.tables:
+                rows = []
+                for row in table.rows:
+                    rows.append([cell.text for cell in row.cells])
+                tables.append(rows)
+            return {"success": True, "data": tables}
+        elif target == "headings":
+            headings = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
+            return {"success": True, "data": headings}
+        else:
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            return {"success": True, "data": text}
+
+    def _handle_structure(self, doc_path: str, params: dict) -> dict:
+        doc = DocxDocument(doc_path)
+        op = params.get("operation", "add_paragraph")
+
+        if op == "add_heading":
+            doc.add_heading(params.get("text", ""), level=params.get("level", 1))
+        elif op == "add_paragraph":
+            doc.add_paragraph(params.get("text", ""))
+
+        doc.save(doc_path)
+        return {"success": True, "message": "Structure operation completed"}

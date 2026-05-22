@@ -25,6 +25,7 @@ data/logs/
 
 data/api_token.txt
 data/settings.json
+docfusion_desktop/backend/data/
 .claude/
 CLAUDE.md
 GITHUB_PUSH_CONSTRAINT.md
