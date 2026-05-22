@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+.next/
+coverage/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime output
+*.log
+logs/
+tmp/
+temp/
+uploads/
+output/
+outputs/
+cache/
+
+# DocFusion server task/runtime data
+server_toolkit/tasks/
+server_toolkit/runtime/
+server_toolkit/.tasks/
+server_toolkit/.runtime/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
