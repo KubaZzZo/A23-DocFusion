@@ -111,6 +111,8 @@ def _ocr_then_extract_plan(instruction: str, inputs: list[str]) -> dict:
 
 
 def _merge_then_format_plan(instruction: str, inputs: list[str]) -> dict:
+    if any(Path(path).suffix.lower() != ".docx" for path in inputs):
+        raise PlanUnresolvedError("PLAN_UNRESOLVED: merge then format requires docx inputs")
     work_file = "work/merged.docx"
     output = "output/merged.docx"
     return {

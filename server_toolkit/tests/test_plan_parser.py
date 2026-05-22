@@ -60,3 +60,12 @@ def test_parse_instruction_builds_merge_then_format_l2_plan():
     assert plan["level"] == "L2"
     assert plan["outputs"] == ["output/merged.docx"]
     assert [step["command"] for step in plan["steps"]] == ["merge", "format-docx"]
+
+
+def test_parse_instruction_rejects_merge_format_for_non_docx_inputs():
+    try:
+        parse_instruction("merge these Word files and format heading font SimHei 16", ["input/a.txt", "input/b.txt"])
+    except PlanUnresolvedError as exc:
+        assert "docx" in str(exc)
+    else:
+        raise AssertionError("expected non-docx merge format rejection")
