@@ -53,7 +53,7 @@ class DocumentParser:
         }
 
     @staticmethod
-    @lru_cache(maxsize=64)
+    @lru_cache(maxsize=8)
     def _do_parse(resolved_path: str, mtime: float, file_size: int) -> dict:
         path = Path(resolved_path)
         suffix = path.suffix.lower()

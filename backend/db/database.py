@@ -264,6 +264,7 @@ class EntityDAO:
                     .filter(Entity.entity_type == entity_type, Entity.entity_value == entity_value)
                     .distinct()
                     .order_by(Document.filename.asc())
+                    .limit(10)
                     .all()
                 )
                 result.append(

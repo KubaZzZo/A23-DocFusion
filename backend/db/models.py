@@ -113,7 +113,16 @@ def get_database_url() -> str:
 
 def init_db():
     Base.metadata.create_all(engine)
+    configure_sqlite_pragmas()
     ensure_entity_indexes()
+
+
+def configure_sqlite_pragmas():
+    if not engine.dialect.name.startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.execute(text("PRAGMA synchronous=NORMAL"))
 
 
 def ensure_entity_indexes():

@@ -46,3 +46,9 @@ def update_llm_config(settings: dict[str, Any]) -> None:
             LLM_CONFIG["openai"]["model"] = settings["openai_model"]
         if "openai_proxy" in settings:
             LLM_CONFIG["openai"]["proxy_url"] = settings["openai_proxy"]
+    try:
+        from llm.factory import clear_llm_cache
+
+        clear_llm_cache()
+    except ImportError:
+        pass
