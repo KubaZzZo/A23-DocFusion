@@ -1,7 +1,7 @@
 """Ollama本地模型客户端"""
 import httpx
 from llm.base import BaseLLM
-from config import LLM_CONFIG
+from llm.runtime_config import get_provider_config
 from logger import get_logger
 
 log = get_logger("llm.ollama")
@@ -9,7 +9,7 @@ log = get_logger("llm.ollama")
 
 class OllamaClient(BaseLLM):
     def __init__(self):
-        cfg = LLM_CONFIG["ollama"]
+        cfg = get_provider_config("ollama")
         self.base_url = cfg["base_url"]
         self.model = cfg["model"]
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from ctypes import wintypes
 
 from config import BASE_DIR, LLM_CONFIG
+from llm.runtime_config import update_llm_config
 from logger import get_logger
 
 DEFAULT_SETTINGS_FILE = BASE_DIR / "data" / "settings.json"
@@ -145,7 +146,8 @@ def save_settings(settings: dict, settings_file: Path | str = DEFAULT_SETTINGS_F
 def apply_settings(settings: dict, runtime_config: dict | None = None):
     """Apply persisted settings to the runtime LLM config dictionary."""
     if runtime_config is None:
-        runtime_config = LLM_CONFIG
+        update_llm_config(settings)
+        return
     if not settings:
         return
     if "provider" in settings:

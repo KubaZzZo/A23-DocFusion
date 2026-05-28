@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from api_client import ApiError, DocFusionApiClient
 from crawler_service import crawl_articles, news_sources
 from server_task_client import ServerTaskClient, ServerTaskConfig, load_server_task_config, save_server_task_config
+from server_task_page import build_server_task_panel
 from local_services import (
     batch_extract_documents,
     clear_and_reextract_document,
@@ -611,92 +612,7 @@ class DocFusionWindow(QMainWindow):
         version_layout.addLayout(version_actions)
         detail_layout.addWidget(version_panel)
 
-        task_panel = QFrame()
-        task_panel.setObjectName("softPanel")
-        task_layout = QVBoxLayout(task_panel)
-        task_layout.setContentsMargins(16, 14, 16, 14)
-        task_layout.setSpacing(12)
-        task_layout.addWidget(self._panel_heading("自然语言任务", ""))
-
-        task_config = QGridLayout()
-        task_config.setHorizontalSpacing(10)
-        task_config.setVerticalSpacing(8)
-        self.server_task_url_input = QLineEdit(self.server_task_config.base_url)
-        self.server_task_token_input = QLineEdit()
-        self.server_task_token_input.setText(self.server_task_config.token)
-        self.server_task_token_input.setEchoMode(QLineEdit.Password)
-        self.server_task_token_input.setPlaceholderText("Bearer token")
-        task_config.addWidget(QLabel("服务器地址"), 0, 0)
-        task_config.addWidget(self.server_task_url_input, 0, 1)
-        task_config.addWidget(QLabel("Token"), 1, 0)
-        task_config.addWidget(self.server_task_token_input, 1, 1)
-        task_layout.addLayout(task_config)
-
-        task_config_actions = QHBoxLayout()
-        check = QPushButton("检测连接")
-        check.setObjectName("secondary")
-        check.clicked.connect(self.check_server_task_health)
-        task_config_actions.addWidget(check)
-        save_config = QPushButton("保存配置")
-        save_config.setObjectName("secondary")
-        save_config.clicked.connect(self.save_server_task_settings)
-        task_config_actions.addWidget(save_config)
-        task_config_actions.addStretch()
-        task_layout.addLayout(task_config_actions)
-
-        self.server_task_connection_label = QLabel("服务器任务会优先使用当前选中文档；未选中文档时可选择临时文件。")
-        self.server_task_connection_label.setObjectName("muted")
-        self.server_task_connection_label.setWordWrap(True)
-        task_layout.addWidget(self.server_task_connection_label)
-
-        self.server_task_instruction = QPlainTextEdit()
-        self.server_task_instruction.setMinimumHeight(82)
-        self.server_task_instruction.setPlaceholderText("例如：OCR 后提取金额、日期和供应商，或 convert this file to PDF")
-        task_layout.addWidget(self.server_task_instruction)
-
-        file_actions = QHBoxLayout()
-        add_files = QPushButton("选择临时文件")
-        add_files.setObjectName("secondary")
-        add_files.clicked.connect(self.add_server_task_files)
-        file_actions.addWidget(add_files)
-        clear_files = QPushButton("清空临时文件")
-        clear_files.setObjectName("secondary")
-        clear_files.clicked.connect(self.clear_server_task_files)
-        file_actions.addWidget(clear_files)
-        file_actions.addStretch()
-        task_layout.addLayout(file_actions)
-
-        self.server_task_files_label = QLabel("输入文件：当前未选择文档，也未选择临时文件")
-        self.server_task_files_label.setObjectName("muted")
-        self.server_task_files_label.setWordWrap(True)
-        task_layout.addWidget(self.server_task_files_label)
-
-        run_actions = QHBoxLayout()
-        submit = QPushButton("提交任务")
-        submit.clicked.connect(self.submit_server_task)
-        run_actions.addWidget(submit)
-        refresh = QPushButton("刷新状态")
-        refresh.setObjectName("secondary")
-        refresh.clicked.connect(self.refresh_server_task_status)
-        run_actions.addWidget(refresh)
-        download = QPushButton("下载结果")
-        download.setObjectName("secondary")
-        download.clicked.connect(self.download_server_task_result)
-        run_actions.addWidget(download)
-        run_actions.addStretch()
-        task_layout.addLayout(run_actions)
-
-        self.server_task_status_view = QPlainTextEdit()
-        self.server_task_status_view.setReadOnly(True)
-        self.server_task_status_view.setMinimumHeight(150)
-        self.server_task_status_view.setPlainText("等待提交服务器任务...")
-        self.server_task_status_view.setStyleSheet(
-            f"background: {INVERSE_ELEVATED}; color: {INVERSE_TEXT}; "
-            "border: 1px solid rgba(250,249,245,0.14); border-radius: 8px; "
-            "font-family: Consolas; font-size: 13px; padding: 12px;"
-        )
-        task_layout.addWidget(self.server_task_status_view)
-        detail_layout.addWidget(task_panel)
+        detail_layout.addWidget(build_server_task_panel(self))
         detail_layout.addStretch()
 
         splitter.addWidget(table_panel)

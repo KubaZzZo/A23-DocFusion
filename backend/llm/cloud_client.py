@@ -4,7 +4,7 @@ import json
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from llm.base import BaseLLM
 from llm.provider_presets import ProviderProfile, build_provider_profile
-from config import LLM_CONFIG
+from llm.runtime_config import get_provider_config
 from logger import get_logger
 
 log = get_logger("llm.cloud")
@@ -12,7 +12,7 @@ log = get_logger("llm.cloud")
 
 class CloudClient(BaseLLM):
     def __init__(self, profile: ProviderProfile | None = None):
-        self.profile = profile or build_provider_profile(LLM_CONFIG["openai"])
+        self.profile = profile or build_provider_profile(get_provider_config("openai"))
         http_client = None
         if self.profile.proxy_url:
             http_client = DefaultAsyncHttpxClient(proxy=self.profile.proxy_url, trust_env=True)

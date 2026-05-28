@@ -85,3 +85,38 @@ def test_docfusion_logger_uses_rotating_file_handler(monkeypatch, tmp_path):
     for handler in list(configured.handlers):
         configured.removeHandler(handler)
         handler.close()
+
+
+def test_llm_runtime_config_snapshot_is_isolated():
+    from config import LLM_CONFIG
+    from llm.runtime_config import get_llm_config_snapshot
+
+    snapshot = get_llm_config_snapshot()
+    snapshot["openai"]["model"] = "changed-in-test"
+
+    assert LLM_CONFIG["openai"]["model"] != "changed-in-test"
+
+
+def test_api_workflows_can_be_overridden_with_dependency_injection():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import api.auth as auth
+    from api.routes import ApiWorkflows, get_workflows, router
+
+    class FakeStatisticsWorkflow:
+        def get_statistics(self):
+            return {"documents": 123, "entities": 456}
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    app.dependency_overrides[get_workflows] = lambda: ApiWorkflows(statistics=FakeStatisticsWorkflow())
+    app.dependency_overrides[auth.require_local_bearer_token] = lambda: None
+    try:
+        response = client.get("/api/statistics", headers={"Authorization": "Bearer test"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"documents": 123, "entities": 456}

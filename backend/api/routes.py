@@ -1,5 +1,6 @@
 """FastAPI路由定义"""
 import io
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from urllib.parse import quote
@@ -22,12 +23,23 @@ from db.database import DocumentDAO, FillTaskDAO
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_local_bearer_token)])
 public_router = APIRouter(prefix="/api")
-document_workflow = DocumentWorkflow()
-entity_workflow = EntityWorkflow()
-template_workflow = TemplateWorkflow()
-article_workflow = ArticleWorkflow()
-statistics_workflow = StatisticsWorkflow()
-batch_workflow = BatchWorkflow()
+
+
+@dataclass
+class ApiWorkflows:
+    document: DocumentWorkflow = field(default_factory=DocumentWorkflow)
+    entity: EntityWorkflow = field(default_factory=EntityWorkflow)
+    template: TemplateWorkflow = field(default_factory=TemplateWorkflow)
+    article: ArticleWorkflow = field(default_factory=ArticleWorkflow)
+    statistics: StatisticsWorkflow = field(default_factory=StatisticsWorkflow)
+    batch: BatchWorkflow = field(default_factory=BatchWorkflow)
+
+
+_workflows = ApiWorkflows()
+
+
+def get_workflows() -> ApiWorkflows:
+    return _workflows
 SERVER_PATH_KEYS = {"path", "file_path", "backup_path", "template_path", "result_path", "report_path", "output_path"}
 _HEADER_UNSAFE_RE = re.compile(r"[\x00-\x1f\x7f\"\\;]")
 SEARCH_QUERY_MAX_LENGTH = 200
@@ -133,17 +145,18 @@ async def _read_limited_upload(file: UploadFile) -> bytes:
 async def list_documents(
     q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
     pagination: PageParams = Depends(),
+    workflows: ApiWorkflows = Depends(get_workflows),
 ):
     """获取所有已上传的文档列表"""
-    docs = document_workflow.list_documents(limit=pagination.limit, offset=pagination.offset, keyword=q)
+    docs = workflows.document.list_documents(limit=pagination.limit, offset=pagination.offset, keyword=q)
     return [_public_document(doc) for doc in docs]
 
 
 @router.delete("/documents/{doc_id}", tags=["文档管理"], summary="删除文档")
-async def delete_document(doc_id: int):
+async def delete_document(doc_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
     """删除文档及其关联的实体数据"""
     try:
-        return document_workflow.delete_document(doc_id)
+        return workflows.document.delete_document(doc_id)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
@@ -158,17 +171,17 @@ async def download_document(doc_id: int):
 
 
 @router.get("/documents/{doc_id}/versions", tags=["文档版本"], summary="获取文档版本")
-async def list_document_versions(doc_id: int):
+async def list_document_versions(doc_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
     try:
-        return [_public_version(doc_id, version) for version in document_workflow.list_versions(doc_id)]
+        return [_public_version(doc_id, version) for version in workflows.document.list_versions(doc_id)]
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
 
 @router.get("/documents/{doc_id}/versions/{version_id}/download", tags=["文档版本"], summary="下载文档版本")
-async def download_document_version(doc_id: int, version_id: int):
+async def download_document_version(doc_id: int, version_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
     try:
-        version = next((item for item in document_workflow.list_versions(doc_id) if int(item["id"]) == version_id), None)
+        version = next((item for item in workflows.document.list_versions(doc_id) if int(item["id"]) == version_id), None)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
     if not version:
@@ -178,59 +191,59 @@ async def download_document_version(doc_id: int, version_id: int):
 
 
 @router.post("/documents/{doc_id}/versions/{version_id}/rollback", tags=["文档版本"], summary="回滚文档版本")
-async def rollback_document_version(doc_id: int, version_id: int):
+async def rollback_document_version(doc_id: int, version_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
     try:
-        return document_workflow.rollback_version(doc_id, version_id)
+        return workflows.document.rollback_version(doc_id, version_id)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
 
 @router.post("/documents/upload", tags=["文档管理"], summary="上传文档")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), workflows: ApiWorkflows = Depends(get_workflows)):
     """上传文档文件，支持 docx/md/xlsx/txt/pdf 格式"""
     try:
-        return _public_document(document_workflow.upload_document(file.filename, await _read_limited_upload(file)))
+        return _public_document(workflows.document.upload_document(file.filename, await _read_limited_upload(file)))
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
 
 @router.post("/documents/parse/{doc_id}", tags=["文档管理"], summary="解析文档")
-async def parse_document(doc_id: int):
+async def parse_document(doc_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
     """解析已上传的文档，提取文本内容"""
     try:
-        return document_workflow.parse_document(doc_id)
+        return workflows.document.parse_document(doc_id)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
 
 @router.post("/documents/extract/{doc_id}", tags=["实体提取"], summary="提取文档实体")
-async def extract_entities(doc_id: int, force: bool = False):
+async def extract_entities(doc_id: int, force: bool = False, workflows: ApiWorkflows = Depends(get_workflows)):
     """从已解析的文档中提取结构化实体信息"""
     try:
-        return await document_workflow.extract_entities(doc_id, force=force)
+        return await workflows.document.extract_entities(doc_id, force=force)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
 
 @router.post("/batch/process", tags=["批量处理"], summary="批量解析、提取、汇总、导出")
-async def process_batch(files: list[UploadFile] = File(...)):
+async def process_batch(files: list[UploadFile] = File(...), workflows: ApiWorkflows = Depends(get_workflows)):
     if not files:
         raise HTTPException(400, "At least one file is required")
     payload = []
     for file in files:
         payload.append((file.filename or "upload.bin", await _read_limited_upload(file)))
-    result = await run_in_threadpool(batch_workflow.process_files, payload)
+    result = await run_in_threadpool(workflows.batch.process_files, payload)
     public = _without_server_paths(result)
     public["download_url"] = f"/api/batch/reports/{result['report_filename']}"
     return public
 
 
 @router.get("/batch/reports/{filename}", tags=["批量处理"], summary="下载批量处理报告")
-async def download_batch_report(filename: str):
+async def download_batch_report(filename: str, workflows: ApiWorkflows = Depends(get_workflows)):
     safe_name = Path(filename).name
     if safe_name != filename:
         raise HTTPException(400, "Invalid filename")
-    path = batch_workflow.output_dir / safe_name
+    path = workflows.batch.output_dir / safe_name
     if not path.is_file():
         raise HTTPException(404, "Report not found")
     return FileResponse(
@@ -241,10 +254,10 @@ async def download_batch_report(filename: str):
 
 
 @router.post("/documents/command", tags=["文档管理"], summary="执行文档操作指令")
-async def execute_command(req: CommandRequest):
+async def execute_command(req: CommandRequest, workflows: ApiWorkflows = Depends(get_workflows)):
     """使用自然语言指令操作文档"""
     try:
-        result = await document_workflow.execute_command(req.doc_id, req.command)
+        result = await workflows.document.execute_command(req.doc_id, req.command)
         public = _without_server_paths(result)
         version = public.get("result", {}).get("version") if isinstance(public.get("result"), dict) else None
         if isinstance(version, dict) and version.get("id"):
@@ -264,9 +277,10 @@ async def list_entities(
     date_from: str | None = Query(default=None, pattern=DATE_PATTERN),
     date_to: str | None = Query(default=None, pattern=DATE_PATTERN),
     pagination: PageParams = Depends(),
+    workflows: ApiWorkflows = Depends(get_workflows),
 ):
     """查询已提取的实体，支持按文档ID或关键词过滤"""
-    return entity_workflow.list_entities(
+    return workflows.entity.list_entities(
         doc_id=doc_id,
         keyword=keyword,
         entity_type=entity_type,
@@ -285,10 +299,11 @@ async def export_entities(
     entity_type: str | None = Query(default=None, max_length=ENTITY_TYPE_MAX_LENGTH),
     date_from: str | None = Query(default=None, pattern=DATE_PATTERN),
     date_to: str | None = Query(default=None, pattern=DATE_PATTERN),
+    workflows: ApiWorkflows = Depends(get_workflows),
 ):
     """导出已提取实体，支持 CSV 和 Excel(xlsx)。"""
     try:
-        export = entity_workflow.export_entities(
+        export = workflows.entity.export_entities(
             fmt=fmt,
             doc_id=doc_id,
             keyword=keyword,
@@ -312,11 +327,12 @@ async def search(
     date_from: str | None = Query(default=None, pattern=DATE_PATTERN),
     date_to: str | None = Query(default=None, pattern=DATE_PATTERN),
     pagination: PageParams = Depends(),
+    workflows: ApiWorkflows = Depends(get_workflows),
 ):
     keyword = (keyword or "").strip()
     return {
-        "documents": [_public_document(doc) for doc in document_workflow.search_documents(keyword, limit=pagination.limit, offset=pagination.offset)] if keyword else [],
-        "entities": entity_workflow.list_entities(
+        "documents": [_public_document(doc) for doc in workflows.document.search_documents(keyword, limit=pagination.limit, offset=pagination.offset)] if keyword else [],
+        "entities": workflows.entity.list_entities(
             keyword=keyword or None,
             entity_type=entity_type,
             date_from=date_from,
@@ -330,21 +346,25 @@ async def search(
 # --- 模板填写 ---
 
 @router.post("/templates/upload", tags=["模板填写"], summary="上传模板")
-async def upload_template(file: UploadFile = File(...)):
+async def upload_template(file: UploadFile = File(...), workflows: ApiWorkflows = Depends(get_workflows)):
     """上传模板表格文件，自动分析待填写字段"""
     try:
-        return _without_server_paths(await template_workflow.upload_template(file.filename, await _read_limited_upload(file)))
+        return _without_server_paths(await workflows.template.upload_template(file.filename, await _read_limited_upload(file)))
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
 
 @router.post("/templates/fill", tags=["模板填写"], summary="自动填写模板")
-async def fill_template(req: FillRequest, background_tasks: BackgroundTasks):
+async def fill_template(
+    req: FillRequest,
+    background_tasks: BackgroundTasks,
+    workflows: ApiWorkflows = Depends(get_workflows),
+):
     """使用提取的实体数据自动填写模板，异步执行"""
     try:
-        task = _validated_fill_task_payload(template_workflow.create_fill_task(req.template_id, req.document_ids))
+        task = _validated_fill_task_payload(workflows.template.create_fill_task(req.template_id, req.document_ids))
         background_tasks.add_task(
-            template_workflow.run_fill_task,
+            workflows.template.run_fill_task,
             task["task_id"],
             task["template_path"],
             task["entities"],
@@ -388,16 +408,16 @@ async def health():
 # --- 爬取文章 ---
 
 @router.get("/articles", tags=["新闻爬虫"], summary="获取爬取文章列表")
-async def list_articles(pagination: PageParams = Depends()):
+async def list_articles(pagination: PageParams = Depends(), workflows: ApiWorkflows = Depends(get_workflows)):
     """获取所有已爬取的文章"""
-    return article_workflow.list_articles(limit=pagination.limit, offset=pagination.offset)
+    return workflows.article.list_articles(limit=pagination.limit, offset=pagination.offset)
 
 
 @router.get("/articles/{article_id}", tags=["新闻爬虫"], summary="获取文章详情")
-async def get_article(article_id: int):
+async def get_article(article_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
     """获取单篇爬取文章的完整内容"""
     try:
-        return article_workflow.get_article(article_id)
+        return workflows.article.get_article(article_id)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
@@ -405,6 +425,6 @@ async def get_article(article_id: int):
 # --- 统计 ---
 
 @router.get("/statistics", tags=["系统"], summary="系统统计数据")
-async def get_statistics():
+async def get_statistics(workflows: ApiWorkflows = Depends(get_workflows)):
     """获取系统各项统计数据"""
-    return statistics_workflow.get_statistics()
+    return workflows.statistics.get_statistics()
