@@ -43,3 +43,16 @@ def test_server_task_config_loads_project_defaults_before_user_overrides(tmp_pat
 
     assert loaded.base_url == "http://project.example:8010"
     assert loaded.token == "local-secret"
+
+
+def test_server_task_config_accepts_utf8_sig_json(tmp_path):
+    path = tmp_path / "server-task.json"
+    path.write_text(
+        json.dumps({"base_url": "https://example.test/toolkit", "token": "secret"}),
+        encoding="utf-8-sig",
+    )
+
+    loaded = load_server_task_config(path)
+
+    assert loaded.base_url == "https://example.test/toolkit"
+    assert loaded.token == "secret"

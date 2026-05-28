@@ -48,7 +48,7 @@ def _read_config_payload(path: str | Path) -> dict[str, Any]:
     if not source.exists():
         return {}
     try:
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
