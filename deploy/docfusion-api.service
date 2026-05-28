@@ -11,7 +11,7 @@ WorkingDirectory=/opt/docfusion/docfusion_desktop/backend
 EnvironmentFile=-/etc/docfusion/docfusion-api.env
 Environment=DOCFUSION_HOST=127.0.0.1
 Environment=DOCFUSION_PORT=8000
-ExecStart=/opt/docfusion/venv/bin/python -m api.server
+ExecStart=/opt/docfusion/venv/bin/python -c "from api.server import start_api_server; start_api_server()"
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

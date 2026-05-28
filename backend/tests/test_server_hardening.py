@@ -117,6 +117,36 @@ def test_openai_api_key_environment_variable_overrides_settings_store(monkeypatc
     assert captured["profile"].api_key == "env-key"
 
 
+def test_main_api_uses_constant_time_compare_when_token_missing(monkeypatch):
+    import hmac
+
+    import pytest
+    from fastapi import HTTPException
+
+    from api import auth
+
+    class Request:
+        method = "GET"
+        headers = {}
+        client = type("Client", (), {"host": "127.0.0.1"})()
+
+    calls = []
+
+    def fake_compare(left, right):
+        calls.append((left, right))
+        return False
+
+    monkeypatch.setattr(auth, "get_api_token", lambda: "secret")
+    monkeypatch.setattr(hmac, "compare_digest", fake_compare)
+
+    with pytest.raises(HTTPException):
+        import asyncio
+
+        asyncio.run(auth.require_local_bearer_token(Request(), None))
+
+    assert calls == [("", "secret")]
+
+
 def test_api_workflows_can_be_overridden_with_dependency_injection():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

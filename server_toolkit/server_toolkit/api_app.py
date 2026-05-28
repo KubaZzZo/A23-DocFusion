@@ -68,7 +68,8 @@ def create_app(
         if not token:
             return
         expected = f"Bearer {token}"
-        if not authorization or not secrets.compare_digest(authorization, expected):
+        supplied = authorization or ""
+        if not secrets.compare_digest(supplied, expected):
             raise _api_error(401, "UNAUTHORIZED", "valid Bearer token is required")
 
     @app.exception_handler(HTTPException)

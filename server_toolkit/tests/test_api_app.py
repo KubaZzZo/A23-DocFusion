@@ -266,6 +266,23 @@ def test_api_uses_constant_time_bearer_token_compare(tmp_path, monkeypatch):
     assert calls == [("Bearer wrong", "Bearer secret")]
 
 
+def test_api_uses_constant_time_compare_when_authorization_missing(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_compare(left, right):
+        calls.append((left, right))
+        return False
+
+    monkeypatch.setattr(secrets, "compare_digest", fake_compare)
+    app = create_app(tmp_path / "tasks", bearer_token="secret")
+    client = TestClient(app)
+
+    response = client.get("/api/server-tasks")
+
+    assert response.status_code == 401
+    assert calls == [("", "Bearer secret")]
+
+
 def test_api_can_load_bearer_token_from_file(tmp_path):
     token_file = tmp_path / "token.txt"
     token_file.write_text("file-secret\n", encoding="utf-8")

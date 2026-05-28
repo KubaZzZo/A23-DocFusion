@@ -22,13 +22,18 @@ install -m 600 /dev/null /etc/docfusion/docfusion-toolkit.env
 printf 'DOCFUSION_EXECUTION_BACKEND=local\n' > /etc/docfusion/docfusion-toolkit.env
 printf '%s\n' 'replace-token' > /etc/docfusion/toolkit-token.txt
 chmod 600 /etc/docfusion/toolkit-token.txt
+chmod 600 /root/.codex/maolao.env
 ```
 
 ## Reverse proxy
 
 Install `nginx-docfusion.conf` under `/etc/nginx/sites-available/`, symlink it into `sites-enabled`, then point the desktop client at the public domain:
 
-- Main API: `http://docfusion.yourdomain.xyz/api`
-- Toolkit API: `http://docfusion.yourdomain.xyz/toolkit`
+- Main API: `https://docx.zhuoruan.xyz/api`
+- Toolkit API: `https://docx.zhuoruan.xyz/toolkit`
 
-Add HTTPS with certbot when the demo needs a trusted browser connection.
+Issue the certificate after DNS points `docx.zhuoruan.xyz` to the VPS:
+
+```bash
+certbot --nginx -d docx.zhuoruan.xyz
+```

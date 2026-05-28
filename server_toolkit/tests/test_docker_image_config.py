@@ -7,6 +7,7 @@ def test_dockerfile_declares_healthcheck():
     text = dockerfile.read_text(encoding="utf-8")
 
     assert "HEALTHCHECK" in text
+    assert "curl -f http://127.0.0.1:8010/healthz" in text
     assert "http://127.0.0.1:8010/healthz" in text
 
 

@@ -10,6 +10,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libreoffice \
         pandoc \
+        curl \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-chi-sim \
@@ -26,6 +27,6 @@ RUN chmod +x /usr/local/bin/docfusion-server \
 EXPOSE 8010
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3).read()" || exit 1
+    CMD curl -f http://127.0.0.1:8010/healthz || exit 1
 
 ENTRYPOINT ["docfusion-server"]

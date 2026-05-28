@@ -1,0 +1,11 @@
+[Unit]
+Description=Clean expired DocFusion toolkit task directories
+
+[Service]
+Type=oneshot
+User=docfusion
+Group=docfusion
+Environment=PYTHONPATH=/opt/docfusion/docfusion_desktop/server_toolkit
+ExecStart=/opt/docfusion/venv/bin/python -c "from server_toolkit.task_service import TaskService; TaskService('/data/docfusion/tasks').cleanup_expired_tasks()"
+NoNewPrivileges=true
+PrivateTmp=true

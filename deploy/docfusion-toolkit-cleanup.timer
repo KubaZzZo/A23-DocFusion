@@ -1,0 +1,10 @@
+[Unit]
+Description=Run DocFusion toolkit task cleanup daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=docfusion-toolkit-cleanup.service
+
+[Install]
+WantedBy=timers.target

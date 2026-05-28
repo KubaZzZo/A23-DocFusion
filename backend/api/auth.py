@@ -107,5 +107,5 @@ async def require_local_bearer_token(
 
     expected = get_api_token()
     supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
-    if not supplied or not hmac.compare_digest(supplied, expected):
+    if not hmac.compare_digest(supplied, expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing API token")
