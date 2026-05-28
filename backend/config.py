@@ -4,6 +4,12 @@ from pathlib import Path
 
 
 def _ensure_private_dir(path: Path) -> Path:
+    if path.is_symlink() and not path.exists():
+        try:
+            target = path.readlink()
+        except OSError:
+            target = "<unreadable>"
+        raise RuntimeError(f"Data directory symlink target does not exist: {path} -> {target}")
     path.mkdir(exist_ok=True)
     try:
         os.chmod(path, 0o700)

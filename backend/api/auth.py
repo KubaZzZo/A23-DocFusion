@@ -12,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from config import DATA_DIR
 
 TOKEN_ENV_VAR = "DOCFUSION_API_TOKEN"
+TOKEN_FILE_ENV_VAR = "DOCFUSION_API_TOKEN_FILE"
 TOKEN_FILE = DATA_DIR / "api_token.txt"
 LOCAL_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -25,6 +26,14 @@ def get_api_token(token_file: Path = TOKEN_FILE) -> str:
     env_token = os.getenv(TOKEN_ENV_VAR, "").strip()
     if env_token:
         return env_token
+
+    env_token_file = os.getenv(TOKEN_FILE_ENV_VAR, "").strip()
+    if env_token_file:
+        configured_token_file = Path(env_token_file)
+        if configured_token_file.exists():
+            _secure_token_file(configured_token_file)
+            return configured_token_file.read_text(encoding="utf-8").strip()
+        raise RuntimeError(f"Configured API token file does not exist: {configured_token_file}")
 
     if token_file.exists():
         _secure_token_file(token_file)

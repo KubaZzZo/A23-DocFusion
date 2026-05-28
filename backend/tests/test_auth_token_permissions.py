@@ -35,6 +35,23 @@ def test_get_api_token_secures_existing_token_file(tmp_path, monkeypatch):
     assert calls == [token_file]
 
 
+def test_get_api_token_prefers_token_file_env(tmp_path, monkeypatch):
+    env_token_file = tmp_path / "env-token.txt"
+    env_token_file.write_text("file-token\n", encoding="utf-8")
+    default_token_file = tmp_path / "default-token.txt"
+    calls = []
+
+    monkeypatch.delenv(auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(auth.TOKEN_FILE_ENV_VAR, str(env_token_file))
+    monkeypatch.setattr(auth, "_secure_token_file", lambda path: calls.append(Path(path)))
+
+    token = auth.get_api_token(default_token_file)
+
+    assert token == "file-token"
+    assert calls == [env_token_file]
+    assert not default_token_file.exists()
+
+
 def test_windows_token_acl_restricts_file_inheritance(monkeypatch, tmp_path):
     calls = []
 

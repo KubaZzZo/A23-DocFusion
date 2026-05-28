@@ -1,6 +1,8 @@
 """统一日志配置"""
 import logging
 import sys
+import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from config import DATA_DIR
 
@@ -27,7 +29,9 @@ def setup_logging(level=logging.INFO):
     root.addHandler(console)
 
     # 文件
-    file_handler = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
+    max_bytes = int(os.getenv("DOCFUSION_LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+    backup_count = int(os.getenv("DOCFUSION_LOG_BACKUP_COUNT", "5"))
+    file_handler = RotatingFileHandler(str(LOG_FILE), maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(fmt, datefmt))
     root.addHandler(file_handler)
