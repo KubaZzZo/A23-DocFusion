@@ -87,6 +87,24 @@ class DocFusionApiClient:
     def article_detail(self, article_id: int) -> dict[str, Any]:
         return self._request("GET", f"/articles/{article_id}")
 
+    def download_document(self, doc_id: int, destination: str | Path) -> Path:
+        url = self._url(f"/documents/{doc_id}/download")
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {self._token()}"}, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=max(self.timeout, 60)) as response:
+                payload = response.read()
+                filename = self._filename_from_disposition(response.headers.get("Content-Disposition")) or f"document-{doc_id}.docx"
+        except urllib.error.HTTPError as exc:
+            raise ApiError(self._format_http_error(exc)) from exc
+        except urllib.error.URLError as exc:
+            raise ApiError(f"Cannot connect to backend service: {exc.reason}") from exc
+
+        target = Path(destination)
+        if target.is_dir():
+            target = target / filename
+        target.write_bytes(payload)
+        return target
+
     def export_entities(
         self,
         destination: str | Path,

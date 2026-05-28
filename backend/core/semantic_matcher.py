@@ -74,7 +74,7 @@ class SemanticMatcher:
             for e in entities
         )
         user_input = f"fields:\n{fields_str}\n\nentities:\n{entities_str}"
-        llm_result = await self.llm.extract_json(MATCH_PROMPT.format(fields="{fields}", entities="{entities}"), user_input)
+        llm_result = await self.llm.extract_json(MATCH_PROMPT.format(fields=fields_str, entities=entities_str), user_input)
         return self._merge_results(local_result, llm_result)
 
     @staticmethod
