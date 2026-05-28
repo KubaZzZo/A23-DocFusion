@@ -53,7 +53,35 @@ def test_batch_workflow_uploads_parses_extracts_and_exports_report(isolated_back
     assert workbook.sheetnames == ["文档汇总", "实体明细"]
     summary_rows = list(workbook["文档汇总"].iter_rows(values_only=True))
     entity_rows = list(workbook["实体明细"].iter_rows(values_only=True))
-    assert summary_rows[0] == ("文档ID", "文件名", "类型", "解析字数", "实体数", "状态", "错误")
+    assert summary_rows[0] == ("文档ID", "文件名", "类型", "解析字数", "实体数", "状态", "失败阶段", "可重试", "错误")
     assert len(summary_rows) == 3
     assert entity_rows[0] == ("文档ID", "文件名", "实体类型", "实体值", "置信度", "上下文")
     assert len(entity_rows) == 5
+
+
+def test_batch_workflow_records_failed_stage_and_retry_items(isolated_backend):
+    def fake_extract(text: str) -> dict:
+        if "fail extraction" in text:
+            raise RuntimeError("temporary extractor outage")
+        return {"entities": [{"type": "email", "value": "ok@example.com", "confidence": 0.9}], "summary": ""}
+
+    workflow = BatchWorkflow(
+        upload_dir=isolated_backend / "uploads",
+        output_dir=isolated_backend / "outputs",
+        extractor=fake_extract,
+    )
+
+    result = workflow.process_files(
+        [
+            ("ok.txt", b"ok@example.com"),
+            ("bad.txt", b"fail extraction"),
+        ]
+    )
+
+    failed_doc = next(doc for doc in result["documents"] if doc["filename"] == "bad.txt")
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    assert failed_doc["status"] == "failed"
+    assert failed_doc["failed_stage"] == "extract"
+    assert failed_doc["retryable"] is True
+    assert result["retry_items"] == [{"filename": "bad.txt", "failed_stage": "extract", "error": "temporary extractor outage"}]

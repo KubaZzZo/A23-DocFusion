@@ -36,6 +36,7 @@ class BatchWorkflow:
         entity_rows: list[dict[str, Any]] = []
 
         for filename, content in files:
+            failed_stage = "upload"
             row = {
                 "doc_id": None,
                 "filename": filename,
@@ -43,13 +44,18 @@ class BatchWorkflow:
                 "text_length": 0,
                 "entities_count": 0,
                 "status": "failed",
+                "failed_stage": "",
+                "retryable": False,
                 "error": "",
             }
             try:
                 uploaded = self.document_workflow.upload_document(filename, content)
+                failed_stage = "parse"
                 parsed = self.document_workflow.parse_document(uploaded["id"], include_text=True)
+                failed_stage = "extract"
                 extraction = self._extract(parsed.get("text", ""))
                 entities = extraction.get("entities", [])
+                failed_stage = "save_entities"
                 EntityDAO.create_batch(uploaded["id"], entities)
 
                 row.update(
@@ -59,6 +65,8 @@ class BatchWorkflow:
                         "text_length": parsed.get("text_length", 0),
                         "entities_count": len(entities),
                         "status": "completed",
+                        "failed_stage": "",
+                        "retryable": False,
                     }
                 )
                 for entity in entities:
@@ -73,11 +81,18 @@ class BatchWorkflow:
                         }
                     )
             except Exception as exc:
+                row["failed_stage"] = failed_stage
+                row["retryable"] = failed_stage in {"parse", "extract", "save_entities"}
                 row["error"] = str(exc)
             rows.append(row)
 
         report_path = self._write_report(rows, entity_rows)
         succeeded = sum(1 for row in rows if row["status"] == "completed")
+        retry_items = [
+            {"filename": row["filename"], "failed_stage": row["failed_stage"], "error": row["error"]}
+            for row in rows
+            if row["status"] == "failed" and row["retryable"]
+        ]
         return {
             "batch_id": report_path.stem,
             "total": len(rows),
@@ -85,6 +100,7 @@ class BatchWorkflow:
             "failed": len(rows) - succeeded,
             "entities_count": len(entity_rows),
             "documents": rows,
+            "retry_items": retry_items,
             "report_path": str(report_path),
             "report_filename": report_path.name,
         }
@@ -102,7 +118,7 @@ class BatchWorkflow:
         workbook = Workbook()
         summary = workbook.active
         summary.title = "文档汇总"
-        summary.append(["文档ID", "文件名", "类型", "解析字数", "实体数", "状态", "错误"])
+        summary.append(["文档ID", "文件名", "类型", "解析字数", "实体数", "状态", "失败阶段", "可重试", "错误"])
         for row in rows:
             summary.append(
                 [
@@ -112,6 +128,8 @@ class BatchWorkflow:
                     row["text_length"],
                     row["entities_count"],
                     row["status"],
+                    row["failed_stage"],
+                    "yes" if row["retryable"] else "no",
                     row["error"],
                 ]
             )
