@@ -30,6 +30,13 @@ def _restrict_windows_acl(path: Path) -> None:
     except OSError:
         pass
 
+
+def _default_tesseract_cmd(os_name: str | None = None) -> str:
+    """Return a platform-appropriate default Tesseract executable."""
+    if (os_name or os.name) == "nt":
+        return r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    return "tesseract"
+
 # 项目根目录
 BASE_DIR = Path(__file__).parent
 
@@ -68,8 +75,8 @@ CHUNK_SIZE = 3000  # 每块最大字符数
 CHUNK_OVERLAP = 200  # 重叠字符数
 
 # API服务
-API_HOST = "127.0.0.1"
-API_PORT = 8000
+API_HOST = os.getenv("DOCFUSION_API_HOST", "127.0.0.1")
+API_PORT = int(os.getenv("DOCFUSION_API_PORT", "8000"))
 MAX_UPLOAD_SIZE = int(os.getenv("DOCFUSION_MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))
 
 # 爬虫配置
@@ -82,6 +89,6 @@ CRAWLER_CONFIG = {
 
 # OCR 配置
 OCR_CONFIG = {
-    "tesseract_cmd": os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+    "tesseract_cmd": os.getenv("TESSERACT_CMD", _default_tesseract_cmd()),
     "lang": "chi_sim+eng",  # 中文简体+英文
 }

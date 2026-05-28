@@ -19,6 +19,18 @@ class Document(Base):
     parsed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.now)
     entities = relationship("Entity", back_populates="document", cascade="all, delete-orphan")
+    versions = relationship("DocumentVersion", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentVersion(Base):
+    __tablename__ = "document_versions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
+    version_no = Column(Integer, nullable=False)
+    file_path = Column(Text, nullable=False)
+    note = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+    document = relationship("Document", back_populates="versions")
 
 
 class Entity(Base):

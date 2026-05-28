@@ -1,8 +1,8 @@
 """数据库操作封装"""
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import distinct, func
-from db.models import session_scope, Document, Entity, Template, FillTask, CrawledArticle
+from sqlalchemy import distinct, func, or_
+from db.models import session_scope, Document, DocumentVersion, Entity, Template, FillTask, CrawledArticle
 
 
 class _ExternalSession:
@@ -68,6 +68,21 @@ class DocumentDAO:
             return docs if session is not None else _expunge_list(s, docs)
 
     @staticmethod
+    def search(keyword: str, limit: int | None = None, offset: int = 0, session=None) -> list[Document]:
+        keyword = keyword.strip()
+        if not keyword:
+            return DocumentDAO.get_all(limit=limit, offset=offset, session=session)
+        pattern = f"%{keyword}%"
+        with _using_session(session) as s:
+            query = (
+                s.query(Document)
+                .filter(or_(Document.filename.like(pattern), Document.raw_text.like(pattern)))
+                .order_by(Document.created_at.desc())
+            )
+            docs = _apply_pagination(query, limit, offset).all()
+            return docs if session is not None else _expunge_list(s, docs)
+
+    @staticmethod
     def get_recent(limit: int = 20) -> list[Document]:
         return DocumentDAO.get_all(limit=limit, offset=0)
 
@@ -105,6 +120,45 @@ class DocumentDAO:
             return {doc_type: count for doc_type, count in rows}
 
 
+class DocumentVersionDAO:
+    @staticmethod
+    def create(document_id: int, file_path: str, note: str = "") -> DocumentVersion:
+        with session_scope() as s:
+            max_version = (
+                s.query(func.max(DocumentVersion.version_no))
+                .filter(DocumentVersion.document_id == document_id)
+                .scalar()
+                or 0
+            )
+            version = DocumentVersion(
+                document_id=document_id,
+                version_no=max_version + 1,
+                file_path=file_path,
+                note=note,
+            )
+            s.add(version)
+            s.flush()
+            s.refresh(version)
+            return _expunge_one(s, version)
+
+    @staticmethod
+    def list_by_document(document_id: int) -> list[DocumentVersion]:
+        with session_scope() as s:
+            versions = (
+                s.query(DocumentVersion)
+                .filter(DocumentVersion.document_id == document_id)
+                .order_by(DocumentVersion.version_no.desc())
+                .all()
+            )
+            return _expunge_list(s, versions)
+
+    @staticmethod
+    def get_by_id(version_id: int) -> Optional[DocumentVersion]:
+        with session_scope() as s:
+            version = s.get(DocumentVersion, version_id)
+            return _expunge_one(s, version)
+
+
 class EntityDAO:
     @staticmethod
     def create_batch(doc_id: int, entities: list[dict], session=None):
@@ -134,12 +188,25 @@ class EntityDAO:
             return entities if session is not None else _expunge_list(s, entities)
 
     @staticmethod
-    def search(keyword: str, limit: int | None = None, offset: int = 0, session=None) -> list[Entity]:
-        keyword = keyword.strip()
-        if not keyword:
-            return []
+    def search(
+        keyword: str | None = None,
+        entity_type: str | None = None,
+        doc_id: int | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        session=None,
+    ) -> list[Entity]:
         with _using_session(session) as s:
-            query = s.query(Entity).filter(Entity.entity_value.contains(keyword))
+            query = s.query(Entity)
+            if doc_id:
+                query = query.filter(Entity.document_id == doc_id)
+            if entity_type:
+                query = query.filter(func.lower(Entity.entity_type) == entity_type.strip().lower())
+            if keyword:
+                keyword = keyword.strip()
+                if keyword:
+                    pattern = f"%{keyword}%"
+                    query = query.filter(or_(Entity.entity_value.like(pattern), Entity.context.like(pattern)))
             entities = _apply_pagination(query, limit, offset).all()
             return entities if session is not None else _expunge_list(s, entities)
 

@@ -1,6 +1,7 @@
 """Local API authentication helpers."""
 import hmac
 import os
+import subprocess
 import secrets
 from pathlib import Path
 from urllib.parse import urlparse
@@ -26,21 +27,47 @@ def get_api_token(token_file: Path = TOKEN_FILE) -> str:
         return env_token
 
     if token_file.exists():
+        _secure_token_file(token_file)
         return token_file.read_text(encoding="utf-8").strip()
 
     token_file.parent.mkdir(exist_ok=True)
     token = secrets.token_urlsafe(32)
     token_file.write_text(token, encoding="utf-8")
+    _secure_token_file(token_file)
+    return token
+
+
+def _secure_token_file(token_file: Path) -> None:
     try:
         os.chmod(token_file, 0o600)
     except OSError:
         pass
-    return token
+    if os.name == "nt":
+        _restrict_windows_token_acl(token_file)
+
+
+def _restrict_windows_token_acl(token_file: Path) -> None:
+    user = os.getenv("USERNAME")
+    if not user:
+        return
+    try:
+        subprocess.run(
+            ["icacls", str(token_file), "/inheritance:r", "/grant:r", f"{user}:F"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        pass
 
 
 def _is_local_client(request: Request) -> bool:
     client = request.client
     return bool(client and client.host in LOCAL_CLIENTS)
+
+
+def _remote_api_enabled() -> bool:
+    return os.getenv("DOCFUSION_ALLOW_REMOTE_API", "").strip().lower() in {"1", "true", "yes"}
 
 
 def _is_trusted_origin(value: str) -> bool:
@@ -65,7 +92,7 @@ async def require_local_bearer_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> None:
     """Require loopback access and the local bearer token for API endpoints."""
-    if not _is_local_client(request):
+    if not _is_local_client(request) and not _remote_api_enabled():
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API access is limited to localhost")
     _validate_browser_origin(request)
 

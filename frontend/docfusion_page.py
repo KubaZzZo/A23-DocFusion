@@ -153,8 +153,10 @@ class DocFusionWindow(QMainWindow):
 
         self.client = DocFusionApiClient()
         self.pool = QThreadPool.globalInstance()
+        self._active_runnables: set[ApiRunnable | ProgressApiRunnable] = set()
         self.nav_buttons: list[NavButton] = []
         self.documents: list[dict[str, Any]] = []
+        self.document_versions: list[dict[str, Any]] = []
         self.entities: list[dict[str, Any]] = []
         self.articles: list[dict[str, Any]] = []
         self.crawled_preview: list[dict[str, Any]] = []
@@ -164,6 +166,8 @@ class DocFusionWindow(QMainWindow):
         self.latest_template_id: int | None = None
         self.latest_task_id: int | None = None
         self.latest_server_task_id: str | None = None
+        self.server_task_poll_count = 0
+        self.server_task_max_polls = 120
         self.server_task_files: list[Path] = []
         self.server_task_defaults_path = Path(__file__).resolve().parent / "server_task.defaults.json"
         self.server_task_config_path = Path.home() / ".docfusion" / "server-task.json"
@@ -187,7 +191,6 @@ class DocFusionWindow(QMainWindow):
         self.stack.addWidget(self._workspace_page())
         self.stack.addWidget(self._document_page())
         self.stack.addWidget(self._fusion_page())
-        self.stack.addWidget(self._server_tasks_page())
         self.stack.addWidget(self._articles_page())
         self.stack.addWidget(self._settings_page())
         root.addWidget(self.stack, 1)
@@ -225,7 +228,7 @@ class DocFusionWindow(QMainWindow):
         divider.setStyleSheet(f"background: {CARD};")
         layout.addWidget(divider)
 
-        for index, label in enumerate(["工作台", "文档库", "融合流程", "服务器任务", "文章库", "系统设置"]):
+        for index, label in enumerate(["工作台", "文档库", "融合流程", "文章库", "系统设置"]):
             btn = NavButton(label)
             btn.clicked.connect(lambda checked=False, i=index: self._activate_nav(i))
             self.nav_buttons.append(btn)
@@ -470,6 +473,10 @@ class DocFusionWindow(QMainWindow):
         batch.setObjectName("secondary")
         batch.clicked.connect(self.batch_extract_documents)
         tools.addWidget(batch)
+        batch_closed_loop = QPushButton("批量处理导出")
+        batch_closed_loop.setObjectName("secondary")
+        batch_closed_loop.clicked.connect(self.batch_process_documents)
+        tools.addWidget(batch_closed_loop)
         parse = QPushButton("解析")
         parse.setObjectName("secondary")
         parse.clicked.connect(self.parse_selected_document)
@@ -492,6 +499,21 @@ class DocFusionWindow(QMainWindow):
         table_layout.setContentsMargins(18, 16, 18, 18)
         table_layout.setSpacing(12)
         table_layout.addWidget(self._panel_heading("文档列表", ""))
+
+        document_search_row = QHBoxLayout()
+        self.document_keyword = QLineEdit()
+        self.document_keyword.setPlaceholderText("全文搜索：公司、金额、日期、合同关键词")
+        self.document_keyword.returnPressed.connect(self.load_documents)
+        document_search_row.addWidget(self.document_keyword, 1)
+        document_search = QPushButton("搜索文档")
+        document_search.setObjectName("secondary")
+        document_search.clicked.connect(self.load_documents)
+        document_search_row.addWidget(document_search)
+        clear_document_search = QPushButton("清空")
+        clear_document_search.setObjectName("secondary")
+        clear_document_search.clicked.connect(self.clear_document_search)
+        document_search_row.addWidget(clear_document_search)
+        table_layout.addLayout(document_search_row)
 
         self.documents_empty = QLabel("暂无文档。点击“上传文档”添加第一份资料。")
         self.documents_empty.setObjectName("muted")
@@ -536,6 +558,10 @@ class DocFusionWindow(QMainWindow):
         reextract_detail.setObjectName("secondary")
         reextract_detail.clicked.connect(self.reextract_selected_document)
         detail_actions.addWidget(reextract_detail)
+        download_detail = QPushButton("下载/打开")
+        download_detail.setObjectName("secondary")
+        download_detail.clicked.connect(self.download_selected_document)
+        detail_actions.addWidget(download_detail)
         delete_detail = QPushButton("删除")
         delete_detail.clicked.connect(self.delete_selected_document)
         detail_actions.addWidget(delete_detail)
@@ -555,6 +581,122 @@ class DocFusionWindow(QMainWindow):
         run_command.clicked.connect(self.execute_document_command)
         command_layout.addWidget(run_command, 0, Qt.AlignLeft)
         detail_layout.addWidget(command_panel)
+
+        version_panel = QFrame()
+        version_panel.setObjectName("softPanel")
+        version_layout = QVBoxLayout(version_panel)
+        version_layout.setContentsMargins(16, 14, 16, 14)
+        version_layout.setSpacing(10)
+        version_layout.addWidget(self._panel_heading("版本管理", ""))
+        self.versions_table = QTableWidget(0, 3)
+        self.versions_table.setHorizontalHeaderLabels(["版本", "时间", "说明"])
+        self.versions_table.verticalHeader().setVisible(False)
+        self.versions_table.horizontalHeader().setStretchLastSection(True)
+        self.versions_table.setMinimumHeight(120)
+        version_layout.addWidget(self.versions_table)
+        version_actions = QHBoxLayout()
+        refresh_versions = QPushButton("刷新版本")
+        refresh_versions.setObjectName("secondary")
+        refresh_versions.clicked.connect(self.load_document_versions)
+        version_actions.addWidget(refresh_versions)
+        download_version = QPushButton("下载版本")
+        download_version.setObjectName("secondary")
+        download_version.clicked.connect(self.download_selected_version)
+        version_actions.addWidget(download_version)
+        rollback_version = QPushButton("回滚版本")
+        rollback_version.setObjectName("secondary")
+        rollback_version.clicked.connect(self.rollback_selected_version)
+        version_actions.addWidget(rollback_version)
+        version_actions.addStretch()
+        version_layout.addLayout(version_actions)
+        detail_layout.addWidget(version_panel)
+
+        task_panel = QFrame()
+        task_panel.setObjectName("softPanel")
+        task_layout = QVBoxLayout(task_panel)
+        task_layout.setContentsMargins(16, 14, 16, 14)
+        task_layout.setSpacing(12)
+        task_layout.addWidget(self._panel_heading("自然语言任务", ""))
+
+        task_config = QGridLayout()
+        task_config.setHorizontalSpacing(10)
+        task_config.setVerticalSpacing(8)
+        self.server_task_url_input = QLineEdit(self.server_task_config.base_url)
+        self.server_task_token_input = QLineEdit()
+        self.server_task_token_input.setText(self.server_task_config.token)
+        self.server_task_token_input.setEchoMode(QLineEdit.Password)
+        self.server_task_token_input.setPlaceholderText("Bearer token")
+        task_config.addWidget(QLabel("服务器地址"), 0, 0)
+        task_config.addWidget(self.server_task_url_input, 0, 1)
+        task_config.addWidget(QLabel("Token"), 1, 0)
+        task_config.addWidget(self.server_task_token_input, 1, 1)
+        task_layout.addLayout(task_config)
+
+        task_config_actions = QHBoxLayout()
+        check = QPushButton("检测连接")
+        check.setObjectName("secondary")
+        check.clicked.connect(self.check_server_task_health)
+        task_config_actions.addWidget(check)
+        save_config = QPushButton("保存配置")
+        save_config.setObjectName("secondary")
+        save_config.clicked.connect(self.save_server_task_settings)
+        task_config_actions.addWidget(save_config)
+        task_config_actions.addStretch()
+        task_layout.addLayout(task_config_actions)
+
+        self.server_task_connection_label = QLabel("服务器任务会优先使用当前选中文档；未选中文档时可选择临时文件。")
+        self.server_task_connection_label.setObjectName("muted")
+        self.server_task_connection_label.setWordWrap(True)
+        task_layout.addWidget(self.server_task_connection_label)
+
+        self.server_task_instruction = QPlainTextEdit()
+        self.server_task_instruction.setMinimumHeight(82)
+        self.server_task_instruction.setPlaceholderText("例如：OCR 后提取金额、日期和供应商，或 convert this file to PDF")
+        task_layout.addWidget(self.server_task_instruction)
+
+        file_actions = QHBoxLayout()
+        add_files = QPushButton("选择临时文件")
+        add_files.setObjectName("secondary")
+        add_files.clicked.connect(self.add_server_task_files)
+        file_actions.addWidget(add_files)
+        clear_files = QPushButton("清空临时文件")
+        clear_files.setObjectName("secondary")
+        clear_files.clicked.connect(self.clear_server_task_files)
+        file_actions.addWidget(clear_files)
+        file_actions.addStretch()
+        task_layout.addLayout(file_actions)
+
+        self.server_task_files_label = QLabel("输入文件：当前未选择文档，也未选择临时文件")
+        self.server_task_files_label.setObjectName("muted")
+        self.server_task_files_label.setWordWrap(True)
+        task_layout.addWidget(self.server_task_files_label)
+
+        run_actions = QHBoxLayout()
+        submit = QPushButton("提交任务")
+        submit.clicked.connect(self.submit_server_task)
+        run_actions.addWidget(submit)
+        refresh = QPushButton("刷新状态")
+        refresh.setObjectName("secondary")
+        refresh.clicked.connect(self.refresh_server_task_status)
+        run_actions.addWidget(refresh)
+        download = QPushButton("下载结果")
+        download.setObjectName("secondary")
+        download.clicked.connect(self.download_server_task_result)
+        run_actions.addWidget(download)
+        run_actions.addStretch()
+        task_layout.addLayout(run_actions)
+
+        self.server_task_status_view = QPlainTextEdit()
+        self.server_task_status_view.setReadOnly(True)
+        self.server_task_status_view.setMinimumHeight(150)
+        self.server_task_status_view.setPlainText("等待提交服务器任务...")
+        self.server_task_status_view.setStyleSheet(
+            f"background: {INVERSE_ELEVATED}; color: {INVERSE_TEXT}; "
+            "border: 1px solid rgba(250,249,245,0.14); border-radius: 8px; "
+            "font-family: Consolas; font-size: 13px; padding: 12px;"
+        )
+        task_layout.addWidget(self.server_task_status_view)
+        detail_layout.addWidget(task_panel)
         detail_layout.addStretch()
 
         splitter.addWidget(table_panel)
@@ -622,11 +764,26 @@ class DocFusionWindow(QMainWindow):
         search_row = QHBoxLayout()
         self.entity_keyword = QLineEdit()
         self.entity_keyword.setPlaceholderText("按实体值或上下文搜索")
+        self.entity_keyword.returnPressed.connect(self.load_entities)
         search_row.addWidget(self.entity_keyword, 1)
+        self.entity_type_filter = QComboBox()
+        self.entity_type_filter.addItem("全部类型", "")
+        self.entity_type_filter.addItem("公司", "organization")
+        self.entity_type_filter.addItem("金额", "amount")
+        self.entity_type_filter.addItem("日期", "date")
+        self.entity_type_filter.addItem("人员", "person")
+        self.entity_type_filter.addItem("电话", "phone")
+        self.entity_type_filter.addItem("邮箱", "email")
+        self.entity_type_filter.currentIndexChanged.connect(self.load_entities)
+        search_row.addWidget(self.entity_type_filter)
         search = QPushButton("搜索")
         search.setObjectName("secondary")
         search.clicked.connect(self.load_entities)
         search_row.addWidget(search)
+        clear_filters = QPushButton("清空")
+        clear_filters.setObjectName("secondary")
+        clear_filters.clicked.connect(self.clear_entity_filters)
+        search_row.addWidget(clear_filters)
         export_csv = QPushButton("导出 CSV")
         export_csv.setObjectName("secondary")
         export_csv.clicked.connect(lambda: self.export_entities("csv"))
@@ -636,6 +793,19 @@ class DocFusionWindow(QMainWindow):
         export_xlsx.clicked.connect(lambda: self.export_entities("xlsx"))
         search_row.addWidget(export_xlsx)
         layout.addLayout(search_row)
+
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel("日期范围"))
+        self.entity_date_from = QLineEdit()
+        self.entity_date_from.setPlaceholderText("开始 YYYY-MM-DD")
+        self.entity_date_from.returnPressed.connect(self.load_entities)
+        date_row.addWidget(self.entity_date_from)
+        self.entity_date_to = QLineEdit()
+        self.entity_date_to.setPlaceholderText("结束 YYYY-MM-DD")
+        self.entity_date_to.returnPressed.connect(self.load_entities)
+        date_row.addWidget(self.entity_date_to)
+        date_row.addStretch()
+        layout.addLayout(date_row)
 
         self.entities_empty = QLabel("暂无实体。请先解析并抽取文档，或清空搜索关键词后刷新。")
         self.entities_empty.setObjectName("muted")
@@ -688,6 +858,7 @@ class DocFusionWindow(QMainWindow):
         layout.addWidget(title)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(500)
         self.log_view.setPlainText("等待操作...")
         self.log_view.setStyleSheet(
             f"background: {INVERSE_ELEVATED}; color: {INVERSE_MUTED}; "
@@ -808,117 +979,6 @@ class DocFusionWindow(QMainWindow):
         grid.setColumnStretch(0, 3)
         grid.setColumnStretch(1, 2)
         layout.addLayout(grid)
-        return page
-
-    def _server_tasks_page(self) -> QWidget:
-        page, layout = self._page_shell()
-        layout.addWidget(self._header("服务器任务", ""))
-
-        config_panel = QFrame()
-        config_panel.setObjectName("paperPanel")
-        config_layout = QVBoxLayout(config_panel)
-        config_layout.setContentsMargins(22, 18, 22, 20)
-        config_layout.setSpacing(12)
-        config_layout.addWidget(self._panel_heading("连接配置", ""))
-
-        config_grid = QGridLayout()
-        config_grid.setHorizontalSpacing(14)
-        config_grid.setVerticalSpacing(10)
-        self.server_task_url_input = QLineEdit(self.server_task_config.base_url)
-        self.server_task_token_input = QLineEdit()
-        self.server_task_token_input.setText(self.server_task_config.token)
-        self.server_task_token_input.setEchoMode(QLineEdit.Password)
-        self.server_task_token_input.setPlaceholderText("Bearer token")
-        config_grid.addWidget(QLabel("服务器地址"), 0, 0)
-        config_grid.addWidget(self.server_task_url_input, 0, 1)
-        config_grid.addWidget(QLabel("Token"), 1, 0)
-        config_grid.addWidget(self.server_task_token_input, 1, 1)
-        config_layout.addLayout(config_grid)
-
-        config_actions = QHBoxLayout()
-        check = QPushButton("检测连接")
-        check.clicked.connect(self.check_server_task_health)
-        config_actions.addWidget(check)
-        save_config = QPushButton("保存配置")
-        save_config.setObjectName("secondary")
-        save_config.clicked.connect(self.save_server_task_settings)
-        config_actions.addWidget(save_config)
-        check_tools = QPushButton("检查工具")
-        check_tools.setObjectName("secondary")
-        check_tools.clicked.connect(self.check_server_task_tools)
-        config_actions.addWidget(check_tools)
-        config_actions.addStretch()
-        config_layout.addLayout(config_actions)
-        self.server_task_connection_label = QLabel("尚未检测服务器任务 API")
-        self.server_task_connection_label.setObjectName("muted")
-        self.server_task_connection_label.setWordWrap(True)
-        config_layout.addWidget(self.server_task_connection_label)
-        layout.addWidget(config_panel)
-
-        submit_panel = QFrame()
-        submit_panel.setObjectName("paperPanel")
-        submit_layout = QVBoxLayout(submit_panel)
-        submit_layout.setContentsMargins(22, 18, 22, 20)
-        submit_layout.setSpacing(12)
-        submit_layout.addWidget(self._panel_heading("自然语言任务", ""))
-
-        self.server_task_instruction = QPlainTextEdit()
-        self.server_task_instruction.setMinimumHeight(90)
-        self.server_task_instruction.setPlaceholderText("例如：convert this file to PDF / ocr then extract amount date vendor")
-        submit_layout.addWidget(self.server_task_instruction)
-
-        file_actions = QHBoxLayout()
-        add_files = QPushButton("选择文件")
-        add_files.clicked.connect(self.add_server_task_files)
-        file_actions.addWidget(add_files)
-        clear_files = QPushButton("清空文件")
-        clear_files.setObjectName("secondary")
-        clear_files.clicked.connect(self.clear_server_task_files)
-        file_actions.addWidget(clear_files)
-        file_actions.addStretch()
-        submit_layout.addLayout(file_actions)
-
-        self.server_task_files_label = QLabel("未选择文件")
-        self.server_task_files_label.setObjectName("muted")
-        self.server_task_files_label.setWordWrap(True)
-        submit_layout.addWidget(self.server_task_files_label)
-
-        run_actions = QHBoxLayout()
-        submit = QPushButton("提交任务")
-        submit.clicked.connect(self.submit_server_task)
-        run_actions.addWidget(submit)
-        refresh = QPushButton("刷新状态")
-        refresh.setObjectName("secondary")
-        refresh.clicked.connect(self.refresh_server_task_status)
-        run_actions.addWidget(refresh)
-        download = QPushButton("下载结果")
-        download.setObjectName("secondary")
-        download.clicked.connect(self.download_server_task_result)
-        run_actions.addWidget(download)
-        run_actions.addStretch()
-        submit_layout.addLayout(run_actions)
-        layout.addWidget(submit_panel)
-
-        result_panel = QFrame()
-        result_panel.setObjectName("darkPanel")
-        result_layout = QVBoxLayout(result_panel)
-        result_layout.setContentsMargins(20, 18, 20, 20)
-        result_layout.setSpacing(12)
-        title = QLabel("任务状态")
-        title.setStyleSheet(f"color: {INVERSE_TEXT}; font-size: 16px; font-weight: 650;")
-        result_layout.addWidget(title)
-        self.server_task_status_view = QPlainTextEdit()
-        self.server_task_status_view.setReadOnly(True)
-        self.server_task_status_view.setMinimumHeight(260)
-        self.server_task_status_view.setPlainText("等待提交服务器任务...")
-        self.server_task_status_view.setStyleSheet(
-            f"background: {INVERSE_ELEVATED}; color: {INVERSE_TEXT}; "
-            "border: 1px solid rgba(250,249,245,0.14); border-radius: 8px; "
-            "font-family: Consolas; font-size: 13px; padding: 12px;"
-        )
-        result_layout.addWidget(self.server_task_status_view)
-        layout.addWidget(result_panel)
-        layout.addStretch()
         return page
 
     def _settings_page(self) -> QWidget:
@@ -1271,11 +1331,40 @@ class DocFusionWindow(QMainWindow):
         self._run_api("加载统计", self.client.statistics, self._on_statistics)
 
     def load_documents(self) -> None:
-        self._run_api("加载文档", self.client.documents, self._on_documents)
+        keyword = self.document_keyword.text().strip() if hasattr(self, "document_keyword") else ""
+        self._run_api("加载文档", lambda: self.client.documents(q=keyword or None), self._on_documents)
 
     def load_entities(self) -> None:
         keyword = self.entity_keyword.text().strip() if hasattr(self, "entity_keyword") else ""
-        self._run_api("加载实体", lambda: self.client.entities(keyword=keyword or None), self._on_entities)
+        entity_type = self._selected_entity_type()
+        date_from = self.entity_date_from.text().strip() if hasattr(self, "entity_date_from") else ""
+        date_to = self.entity_date_to.text().strip() if hasattr(self, "entity_date_to") else ""
+        self._run_api(
+            "加载实体",
+            lambda: self.client.entities(
+                keyword=keyword or None,
+                entity_type=entity_type,
+                date_from=date_from or None,
+                date_to=date_to or None,
+            ),
+            self._on_entities,
+        )
+
+    def clear_document_search(self) -> None:
+        if hasattr(self, "document_keyword"):
+            self.document_keyword.clear()
+        self.load_documents()
+
+    def clear_entity_filters(self) -> None:
+        if hasattr(self, "entity_keyword"):
+            self.entity_keyword.clear()
+        if hasattr(self, "entity_type_filter"):
+            self.entity_type_filter.setCurrentIndex(0)
+        if hasattr(self, "entity_date_from"):
+            self.entity_date_from.clear()
+        if hasattr(self, "entity_date_to"):
+            self.entity_date_to.clear()
+        self.load_entities()
 
     def load_articles(self) -> None:
         self._run_api("加载文章", self.client.articles, self._on_articles)
@@ -1304,9 +1393,28 @@ class DocFusionWindow(QMainWindow):
             return
         runnable = ProgressApiRunnable(lambda progress: batch_extract_documents(paths, progress))
         runnable.signals.progress.connect(lambda event: self.log(event.get("message", str(event)) if isinstance(event, dict) else str(event)))
-        runnable.signals.succeeded.connect(lambda data: self._after_mutation(data, "批量提取完成"))
+        runnable.signals.succeeded.connect(lambda data: self._safe_api_success("批量提取", lambda payload: self._after_mutation(payload, "批量提取完成"), data))
         runnable.signals.failed.connect(lambda message: self._on_api_error("批量提取", message))
-        self.pool.start(runnable)
+        self._start_runnable(runnable)
+
+    def batch_process_documents(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "批量选择文档",
+            str(Path.home()),
+            "Documents (*.docx *.xlsx *.md *.txt *.pdf *.png *.jpg *.jpeg *.bmp);;All files (*.*)",
+        )
+        if not paths:
+            return
+        default_path = str(Path.home() / "Downloads" / "batch_report.xlsx")
+        target, _ = QFileDialog.getSaveFileName(self, "保存批量汇总报告", default_path, "Excel (*.xlsx)")
+        if not target:
+            return
+        self._run_api(
+            "批量处理导出",
+            lambda: self.client.batch_process_documents([Path(path) for path in paths], target),
+            self._on_batch_processed,
+        )
 
     def parse_selected_document(self) -> None:
         doc_id = self._require_selected_doc()
@@ -1338,6 +1446,59 @@ class DocFusionWindow(QMainWindow):
             return
         self._run_api("删除文档", lambda: self.client.delete_document(doc_id), lambda data: self._after_mutation(data, "文档已删除"))
 
+    def download_selected_document(self) -> None:
+        doc = self._selected_document()
+        if not doc:
+            QMessageBox.information(self, "未选择文档", "请先选择要下载的文档。")
+            return
+        doc_id = int(doc["id"])
+        filename = doc.get("filename") or f"document-{doc_id}.docx"
+        default_path = str(Path.home() / "Downloads" / filename)
+        target, _ = QFileDialog.getSaveFileName(self, "保存文档", default_path)
+        if not target:
+            return
+        self._run_api(
+            "下载文档",
+            lambda: self.client.download_document(doc_id, target),
+            self._on_document_downloaded,
+        )
+
+    def load_document_versions(self) -> None:
+        doc_id = self._require_selected_doc()
+        if not doc_id:
+            return
+        self._run_api("加载版本", lambda: self.client.document_versions(doc_id), self._on_document_versions)
+
+    def download_selected_version(self) -> None:
+        selected = self._selected_version()
+        doc = self._selected_document()
+        if not selected or not doc:
+            QMessageBox.information(self, "未选择版本", "请先选择要下载的版本。")
+            return
+        filename = f"{Path(doc.get('filename') or 'document.docx').stem}_v{selected.get('version_no')}.docx"
+        target, _ = QFileDialog.getSaveFileName(self, "保存版本", str(Path.home() / "Downloads" / filename))
+        if not target:
+            return
+        self._run_api(
+            "下载版本",
+            lambda: self.client.download_document_version(int(doc["id"]), int(selected["id"]), target),
+            self._on_document_downloaded,
+        )
+
+    def rollback_selected_version(self) -> None:
+        selected = self._selected_version()
+        doc = self._selected_document()
+        if not selected or not doc:
+            QMessageBox.information(self, "未选择版本", "请先选择要回滚的版本。")
+            return
+        if QMessageBox.question(self, "确认回滚", f"确定回滚到版本 v{selected.get('version_no')} 吗？当前文档会被覆盖。") != QMessageBox.Yes:
+            return
+        self._run_api(
+            "回滚版本",
+            lambda: self.client.rollback_document_version(int(doc["id"]), int(selected["id"])),
+            lambda data: self._after_mutation(data, "版本已回滚"),
+        )
+
     def execute_document_command(self) -> None:
         doc_id = self._require_selected_doc()
         if not doc_id:
@@ -1363,10 +1524,21 @@ class DocFusionWindow(QMainWindow):
         if not path:
             return
         keyword = self.entity_keyword.text().strip() if hasattr(self, "entity_keyword") else ""
+        entity_type = self._selected_entity_type()
+        date_from = self.entity_date_from.text().strip() if hasattr(self, "entity_date_from") else ""
+        date_to = self.entity_date_to.text().strip() if hasattr(self, "entity_date_to") else ""
         doc_id = self.selected_doc_id
         self._run_api(
             "导出实体",
-            lambda: self.client.export_entities(path, fmt=fmt, doc_id=doc_id, keyword=keyword or None),
+            lambda: self.client.export_entities(
+                path,
+                fmt=fmt,
+                doc_id=doc_id,
+                keyword=keyword or None,
+                entity_type=entity_type,
+                date_from=date_from or None,
+                date_to=date_to or None,
+            ),
             lambda target: self.log(f"实体已导出：{target}"),
         )
 
@@ -1434,12 +1606,13 @@ class DocFusionWindow(QMainWindow):
         if not instruction:
             QMessageBox.information(self, "缺少指令", "请先输入自然语言任务指令。")
             return
-        if not self.server_task_files:
-            QMessageBox.information(self, "缺少文件", "请先选择要上传到服务器的文件。")
+        task_files = self._server_task_input_files()
+        if not task_files:
+            QMessageBox.information(self, "缺少文件", "请先在文档库选择文档，或选择临时文件。")
             return
         self._run_api(
             "提交服务器任务",
-            lambda: self._server_task_client().submit_instruction(instruction, self.server_task_files),
+            lambda: self._server_task_client().submit_instruction(instruction, task_files),
             self._on_server_task_submitted,
         )
 
@@ -1492,9 +1665,9 @@ class DocFusionWindow(QMainWindow):
 
         runnable = ProgressApiRunnable(lambda progress: crawl_articles(sources, count, progress))
         runnable.signals.progress.connect(self._on_crawl_progress)
-        runnable.signals.succeeded.connect(self._on_crawl_finished)
+        runnable.signals.succeeded.connect(lambda data: self._safe_api_success("爬取文章", self._on_crawl_finished, data))
         runnable.signals.failed.connect(lambda message: self._on_crawl_failed(message))
-        self.pool.start(runnable)
+        self._start_runnable(runnable)
 
     def store_selected_crawled_articles(self) -> None:
         articles = self._selected_crawled_articles()
@@ -1718,9 +1891,20 @@ class DocFusionWindow(QMainWindow):
     def _run_api(self, label: str, task: Callable[[], object], on_success: Callable[[Any], None]) -> None:
         self.log(f"{label}...")
         runnable = ApiRunnable(task)
-        runnable.signals.succeeded.connect(on_success)
+        runnable.signals.succeeded.connect(lambda data, action=label, callback=on_success: self._safe_api_success(action, callback, data))
         runnable.signals.failed.connect(lambda message, action=label: self._on_api_error(action, message))
+        self._start_runnable(runnable)
+
+    def _start_runnable(self, runnable: ApiRunnable | ProgressApiRunnable) -> None:
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(lambda r=runnable: self._active_runnables.discard(r))
         self.pool.start(runnable)
+
+    def _safe_api_success(self, action: str, callback: Callable[[Any], None], data: Any) -> None:
+        try:
+            callback(data)
+        except Exception as exc:
+            self._on_api_error(action, f"前端处理结果失败：{exc}")
 
     def _on_health(self, data: dict[str, Any]) -> None:
         self.api_status_tag.setText("后端已连接")
@@ -1758,7 +1942,17 @@ class DocFusionWindow(QMainWindow):
                 self.documents_table.setItem(row, col, item)
         self.documents_table.resizeColumnsToContents()
         self._render_recent_documents()
-        self.log(f"文档列表已更新：{len(docs)} 条")
+
+    def _on_document_versions(self, versions: list[dict[str, Any]]) -> None:
+        self.document_versions = versions
+        if not hasattr(self, "versions_table"):
+            return
+        self.versions_table.setRowCount(len(versions))
+        for row, version in enumerate(versions):
+            self.versions_table.setItem(row, 0, QTableWidgetItem(f"v{version.get('version_no')}"))
+            self.versions_table.setItem(row, 1, QTableWidgetItem(str(version.get("created_at") or "")))
+            self.versions_table.setItem(row, 2, QTableWidgetItem(str(version.get("note") or "")))
+        self.log(f"版本列表已更新：{len(versions)} 条")
 
     def _on_entities(self, entities: list[dict[str, Any]]) -> None:
         self.entities = entities
@@ -1965,6 +2159,17 @@ class DocFusionWindow(QMainWindow):
         self.load_statistics()
         self.load_documents()
         self.load_entities()
+        if self.selected_doc_id:
+            self.load_document_versions()
+
+    def _on_batch_processed(self, data: dict[str, Any]) -> None:
+        report_path = Path(str(data.get("report_path", "")))
+        self.log(f"批量处理完成：{self._pretty(data)}")
+        self.load_statistics()
+        self.load_documents()
+        self.load_entities()
+        if report_path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(report_path)))
 
     def _on_template_uploaded(self, data: dict[str, Any]) -> None:
         self.latest_template_id = int(data["id"])
@@ -1979,8 +2184,9 @@ class DocFusionWindow(QMainWindow):
         self.log(f"填充任务已创建：{self._pretty(data)}")
 
     def _on_fill_status(self, data: dict[str, Any]) -> None:
+        output = data.get("result_download_url") or "-"
         self.template_status.setText(
-            f"任务 #{data.get('task_id')}：{data.get('status')}，准确率：{data.get('accuracy')}，输出：{data.get('result_path')}"
+            f"任务 #{data.get('task_id')}：{data.get('status')}，准确率：{data.get('accuracy')}，输出：{output}"
         )
         self.log(f"填充任务状态：{self._pretty(data)}")
 
@@ -1995,9 +2201,8 @@ class DocFusionWindow(QMainWindow):
 
     def _on_server_task_submitted(self, data: dict[str, Any]) -> None:
         self.latest_server_task_id = str(data.get("task_id") or "")
+        self.server_task_poll_count = 0
         self._on_server_task_status(data)
-        if self.latest_server_task_id:
-            QTimer.singleShot(1200, self.refresh_server_task_status)
 
     def _on_server_task_status(self, data: dict[str, Any]) -> None:
         self.latest_server_task_id = str(data.get("task_id") or self.latest_server_task_id or "")
@@ -2005,11 +2210,28 @@ class DocFusionWindow(QMainWindow):
         status = data.get("status")
         self.log(f"服务器任务 {self.latest_server_task_id or '-'}：{status}")
         if status in {"queued", "running"}:
-            QTimer.singleShot(1500, self.refresh_server_task_status)
+            self._schedule_server_task_poll()
+        else:
+            self.server_task_poll_count = 0
+
+    def _schedule_server_task_poll(self) -> None:
+        if not self.latest_server_task_id:
+            return
+        self.server_task_poll_count += 1
+        if self.server_task_poll_count > self.server_task_max_polls:
+            message = f"服务器任务 {self.latest_server_task_id} 轮询已停止：超过 {self.server_task_max_polls} 次仍未完成。"
+            self.server_task_status_view.appendPlainText(f"\n{message}")
+            self.log(message)
+            return
+        QTimer.singleShot(1500, self.refresh_server_task_status)
 
     def _on_server_task_downloaded(self, path: Path) -> None:
         self.server_task_status_view.appendPlainText(f"\nDownloaded: {path}")
         self.log(f"服务器任务结果已下载：{path}")
+
+    def _on_document_downloaded(self, path: Path) -> None:
+        self.log(f"文档已下载：{path}")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _server_task_client(self) -> ServerTaskClient:
         return ServerTaskClient(
@@ -2018,10 +2240,50 @@ class DocFusionWindow(QMainWindow):
         )
 
     def _render_server_task_files(self) -> None:
-        if not self.server_task_files:
-            self.server_task_files_label.setText("未选择文件")
+        if not hasattr(self, "server_task_files_label"):
             return
-        self.server_task_files_label.setText("\n".join(str(path) for path in self.server_task_files))
+        selected_doc = self._selected_document()
+        if selected_doc:
+            file_path = selected_doc.get("file_path") or selected_doc.get("path")
+            self.server_task_files_label.setText(f"输入文件：当前文档\n{file_path or selected_doc.get('filename')}")
+            return
+        if self.server_task_files:
+            self.server_task_files_label.setText("输入文件：临时文件\n" + "\n".join(str(path) for path in self.server_task_files))
+            return
+        self.server_task_files_label.setText("输入文件：当前未选择文档，也未选择临时文件")
+
+    def _selected_document(self) -> dict[str, Any] | None:
+        if self.selected_doc_id is None:
+            return None
+        for doc in self.documents:
+            if int(doc.get("id", -1)) == self.selected_doc_id:
+                return doc
+        return None
+
+    def _selected_version(self) -> dict[str, Any] | None:
+        if not hasattr(self, "versions_table"):
+            return None
+        row = self.versions_table.currentRow()
+        if row < 0 or row >= len(self.document_versions):
+            return None
+        return self.document_versions[row]
+
+    def _selected_entity_type(self) -> str | None:
+        if not hasattr(self, "entity_type_filter"):
+            return None
+        value = self.entity_type_filter.currentData()
+        return str(value) if value else None
+
+    def _server_task_input_files(self) -> list[Path]:
+        selected_doc = self._selected_document()
+        if selected_doc:
+            raw_path = selected_doc.get("file_path") or selected_doc.get("path")
+            if raw_path:
+                path = Path(str(raw_path))
+                if path.is_file():
+                    return [path]
+                self.log(f"选中文档文件不存在，改用临时文件：{path}")
+        return list(self.server_task_files)
 
     def _on_api_error(self, action: str, message: str) -> None:
         self.api_status_tag.setText("后端未就绪")
@@ -2037,10 +2299,14 @@ class DocFusionWindow(QMainWindow):
         row = self.documents_table.currentRow()
         if row < 0 or row >= len(self.documents):
             self.selected_doc_id = None
+            self.document_versions = []
+            if hasattr(self, "versions_table"):
+                self.versions_table.setRowCount(0)
             self.selected_doc_label.setText("尚未选择文档")
             if hasattr(self, "doc_detail_title"):
                 self.doc_detail_title.setText("尚未选择文档")
                 self.doc_detail_meta.setText("从左侧表格选择文档。")
+            self._render_server_task_files()
             return
         doc = self.documents[row]
         self.selected_doc_id = int(doc["id"])
@@ -2056,6 +2322,8 @@ class DocFusionWindow(QMainWindow):
                 f"解析状态：{'已解析' if doc.get('parsed') else '未解析'}\n"
                 f"创建时间：{doc.get('created_at') or '-'}"
             )
+        self._render_server_task_files()
+        self.load_document_versions()
 
     def _on_article_selected(self) -> None:
         row = self.articles_table.currentRow()
@@ -2096,8 +2364,9 @@ class DocFusionWindow(QMainWindow):
 
     def log(self, message: str) -> None:
         if hasattr(self, "log_view"):
-            existing = self.log_view.toPlainText()
-            self.log_view.setPlainText(f"{existing}\n{message}".strip())
+            if self.log_view.toPlainText() == "等待操作...":
+                self.log_view.clear()
+            self.log_view.appendPlainText(str(message))
             self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
 
     @staticmethod

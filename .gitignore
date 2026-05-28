@@ -25,6 +25,10 @@ coverage/
 !.env.example
 
 # Logs and runtime output
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
 *.log
 logs/
 tmp/

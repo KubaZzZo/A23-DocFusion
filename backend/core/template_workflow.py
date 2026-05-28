@@ -11,7 +11,7 @@ from core.upload_limits import validate_upload_size
 from core.workflow_errors import WorkflowNotFoundError
 from db.database import EntityDAO, TemplateDAO, FillTaskDAO
 from config import OUTPUT_DIR, UPLOAD_DIR
-from utils.file_utils import FileTransaction
+from utils.file_utils import FileTransaction, sanitize_upload_filename
 from logger import get_logger
 
 log = get_logger("core.template_workflow")
@@ -24,12 +24,13 @@ class TemplateWorkflow:
 
     async def upload_template(self, filename: str, content: bytes) -> dict:
         validate_upload_size(content)
-        validate_file_signature(filename, content)
+        safe_filename = sanitize_upload_filename(filename, default_stem="template")
+        validate_file_signature(safe_filename, content)
         with FileTransaction() as tx:
-            save_path = tx.write_bytes(self._next_upload_path(filename), content)
+            save_path = tx.write_bytes_unique(self.upload_dir / safe_filename, content)
             filler = TemplateFiller()
             analysis = await filler.analyze_template(str(save_path))
-            tpl = TemplateDAO.create(filename, str(save_path), json.dumps(analysis, ensure_ascii=False))
+            tpl = TemplateDAO.create(safe_filename, str(save_path), json.dumps(analysis, ensure_ascii=False))
             tx.commit()
         return {
             "id": tpl.id,
@@ -124,14 +125,6 @@ class TemplateWorkflow:
             "message": f"{filled_count}/{total_count} fields matched, written to {filled_cells} cells",
             "unmatched": unmatched_names,
         }
-
-    def _next_upload_path(self, filename: str) -> Path:
-        source = Path(filename)
-        save_path = self.upload_dir / source.name
-        if not save_path.exists():
-            return save_path
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.upload_dir / f"{source.stem}_{timestamp}{source.suffix}"
 
 
 __all__ = ["TemplateWorkflow"]
