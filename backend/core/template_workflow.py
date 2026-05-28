@@ -16,6 +16,7 @@ from utils.file_utils import FileTransaction, sanitize_upload_filename
 from logger import get_logger
 
 log = get_logger("core.template_workflow")
+REVIEW_CONFIDENCE_THRESHOLD = 0.75
 
 
 class TemplateWorkflow:
@@ -60,13 +61,16 @@ class TemplateWorkflow:
         suggestions = []
         for field_name in fields:
             match = self._best_entity_for_field(field_name, entities)
+            confidence = match.get("confidence", 0) if match else 0
+            review_required = not match or float(confidence or 0) < REVIEW_CONFIDENCE_THRESHOLD
             suggestions.append(
                 {
                     "field": field_name,
                     "suggested_value": match.get("value", "") if match else "",
                     "entity_type": match.get("type", "") if match else "",
-                    "confidence": match.get("confidence", 0) if match else 0,
-                    "status": "suggested" if match else "unmatched",
+                    "confidence": confidence,
+                    "review_required": review_required,
+                    "status": "needs_review" if review_required else "suggested",
                 }
             )
         return {"template_id": template_id, "fields": fields, "suggestions": suggestions}

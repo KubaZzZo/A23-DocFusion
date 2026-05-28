@@ -132,13 +132,13 @@ class EntityExtractor:
 
         if len(chunks) == 1:
             self._emit_progress(progress, "chunk", 1, 1, "正在处理第 1/1 块")
-            result = await self.llm.extract_json(prompt, chunks[0])
+            result = await self._extract_chunk_with_retry(prompt, chunks[0], progress, 1, 1)
         else:
             results = []
             total = len(chunks)
             for index, chunk in enumerate(chunks, start=1):
                 self._emit_progress(progress, "chunk", index, total, f"正在处理第 {index}/{total} 块")
-                results.append(await self.llm.extract_json(prompt, chunk))
+                results.append(await self._extract_chunk_with_retry(prompt, chunk, progress, index, total))
             result = self._merge_results(results)
 
         if result.get("parse_error"):
@@ -171,6 +171,41 @@ class EntityExtractor:
     def _emit_progress(callback, stage: str, current: int, total: int, message: str) -> None:
         if callback:
             callback({"stage": stage, "current": current, "total": total, "message": message})
+
+    @staticmethod
+    def _emit_retry_progress(callback, current: int, total: int, attempt: int, message: str) -> None:
+        if callback:
+            callback({"stage": "retry", "current": current, "total": total, "attempt": attempt, "message": message})
+
+    async def _extract_chunk_with_retry(
+        self,
+        prompt: str,
+        chunk: str,
+        progress,
+        current: int,
+        total: int,
+        max_attempts: int = 2,
+    ) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = await self.llm.extract_json(prompt, chunk)
+                if attempt > 1:
+                    self._emit_progress(progress, "chunk", current, total, f"chunk {current}/{total} retry succeeded")
+                return result
+            except Exception as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    raise
+                self._emit_retry_progress(
+                    progress,
+                    current,
+                    total,
+                    attempt + 1,
+                    f"chunk {current}/{total} failed, retrying attempt {attempt + 1}",
+                )
+                await asyncio.sleep(0)
+        raise last_error or RuntimeError("LLM extraction failed")
 
     def _cache_key_prefix(self) -> str:
         profile = getattr(self.llm, "profile", None)

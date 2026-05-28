@@ -524,6 +524,10 @@ class DocFusionWindow(QMainWindow):
         demo.setObjectName("secondary")
         demo.clicked.connect(self.load_demo_data)
         tools.addWidget(demo)
+        demo_mode = QPushButton("一键演示")
+        demo_mode.setObjectName("secondary")
+        demo_mode.clicked.connect(self.run_demo_mode)
+        tools.addWidget(demo_mode)
         full_report = QPushButton("导出全流程报告")
         full_report.setObjectName("secondary")
         full_report.clicked.connect(self.export_full_report)
@@ -546,6 +550,7 @@ class DocFusionWindow(QMainWindow):
                 self.batch_extract_button,
                 self.batch_process_button,
                 demo,
+                demo_mode,
                 full_report,
                 parse,
                 extract,
@@ -1429,15 +1434,25 @@ class DocFusionWindow(QMainWindow):
     def load_demo_data(self) -> None:
         self._run_api("加载演示数据", self.client.load_demo_data, lambda data: self._after_mutation(data, "演示数据已加载"))
 
+    def run_demo_mode(self) -> None:
+        self._run_api("一键演示", self.client.load_demo_data, self._on_demo_mode_loaded)
+
+    def _on_demo_mode_loaded(self, data: dict[str, Any]) -> None:
+        self.log(f"演示数据已加载，正在刷新演示视图: {self._pretty(data)}")
+        self.refresh_all()
+        self.load_cross_document_entities()
+        self.load_entity_graph()
+
     def export_full_report(self) -> None:
         target, _ = QFileDialog.getSaveFileName(
             self,
             "导出全流程报告",
             str(Path.home() / "Downloads" / "docfusion_full_report.docx"),
-            "Word (*.docx)",
+            "Word (*.docx);;PDF (*.pdf)",
         )
         if target:
-            self._run_api("导出全流程报告", lambda: self.client.download_full_report(target), self._on_document_downloaded)
+            fmt = "pdf" if str(target).lower().endswith(".pdf") else "docx"
+            self._run_api("导出全流程报告", lambda: self.client.download_full_report(target, fmt=fmt), self._on_document_downloaded)
 
 
     def upload_document(self) -> None:
@@ -2240,10 +2255,25 @@ class DocFusionWindow(QMainWindow):
 
     def _on_entity_graph(self, graph: dict[str, Any]) -> None:
         if hasattr(self, "entity_graph_view"):
-            self.entity_graph_view.setPlainText(self._pretty(graph))
+            self.entity_graph_view.setPlainText(self._format_entity_graph(graph))
         node_count = len(graph.get("nodes", []))
         edge_count = len(graph.get("edges", []))
         self.log(f"实体关系图谱已加载：{node_count} 节点 / {edge_count} 边")
+
+    @staticmethod
+    def _format_entity_graph(graph: dict[str, Any]) -> str:
+        nodes = graph.get("nodes", []) or []
+        edges = graph.get("edges", []) or []
+        labels = {str(node.get("id")): str(node.get("label") or node.get("id")) for node in nodes}
+        lines = [f"Nodes: {len(nodes)}", f"Edges: {len(edges)}", "", "Relations:"]
+        if not edges:
+            lines.append("- None")
+        for edge in edges[:80]:
+            source = labels.get(str(edge.get("source")), str(edge.get("source", "")))
+            target = labels.get(str(edge.get("target")), str(edge.get("target", "")))
+            label = edge.get("label") or edge.get("type") or "related"
+            lines.append(f"- {source} -> {target} ({label})")
+        return "\n".join(lines)
 
     def _on_version_diff(self, data: dict[str, Any]) -> None:
         text = data.get("diff") or "无文本差异"

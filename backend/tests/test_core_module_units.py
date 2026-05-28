@@ -27,6 +27,23 @@ class FakeExtractLLM:
         }
 
 
+class FailsOnceLLM:
+    model = "gpt-4o"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def extract_json(self, prompt, text):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("temporary provider failure")
+        return {
+            "entities": [{"type": "organization", "value": "Retry Corp", "context": text[:40], "confidence": 0.95}],
+            "summary": "retry summary",
+            "topic": "contract",
+        }
+
+
 @pytest.mark.asyncio
 async def test_entity_extractor_with_mock_llm_merges_normalized_entities():
     extractor = EntityExtractor(enable_verify=False)
@@ -39,6 +56,20 @@ async def test_entity_extractor_with_mock_llm_merges_normalized_entities():
     assert "1200000" in values
     assert "ok@example.com" in values
     assert result["summary"] == "contract summary"
+
+
+@pytest.mark.asyncio
+async def test_entity_extractor_retries_failed_llm_chunk_and_reports_progress():
+    extractor = EntityExtractor(enable_verify=False)
+    fake_llm = FailsOnceLLM()
+    extractor.llm = fake_llm
+    events = []
+
+    result = await extractor.extract("Retry Corp contract text", force=True, progress=events.append)
+
+    assert fake_llm.calls == 2
+    assert any(event["stage"] == "retry" and event["attempt"] == 2 for event in events)
+    assert result["entities"][0]["value"] == "Retry Corp"
 
 
 @pytest.mark.asyncio

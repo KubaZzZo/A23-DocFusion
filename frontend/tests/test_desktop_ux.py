@@ -112,3 +112,46 @@ def test_statistics_drive_pipeline_progress_from_api_data():
         assert window.pipeline_bars["template"].value() == 100
     finally:
         window.close()
+
+
+def test_entity_graph_renders_readable_network_summary():
+    window = make_window()
+    try:
+        window._on_entity_graph(
+            {
+                "nodes": [
+                    {"id": "doc:1", "kind": "document", "label": "contract.docx"},
+                    {"id": "entity:Acme", "kind": "entity", "label": "Acme"},
+                ],
+                "edges": [{"source": "doc:1", "target": "entity:Acme", "label": "mentions"}],
+            }
+        )
+
+        text = window.entity_graph_view.toPlainText()
+        assert "Nodes: 2" in text
+        assert "Edges: 1" in text
+        assert "contract.docx -> Acme" in text
+    finally:
+        window.close()
+
+
+def test_demo_mode_loads_data_and_refreshes_competition_views(monkeypatch):
+    window = make_window()
+    calls = []
+
+    def run_immediately(label, task, on_success):
+        calls.append(label)
+        on_success(task())
+
+    monkeypatch.setattr(window.client, "load_demo_data", lambda: {"documents": 3, "entities": 14, "templates": 1})
+    monkeypatch.setattr(window, "_run_api", run_immediately)
+    monkeypatch.setattr(window, "refresh_all", lambda: calls.append("refresh_all"))
+    monkeypatch.setattr(window, "load_cross_document_entities", lambda: calls.append("load_cross_document_entities"))
+    monkeypatch.setattr(window, "load_entity_graph", lambda: calls.append("load_entity_graph"))
+
+    try:
+        window.run_demo_mode()
+
+        assert calls == ["一键演示", "refresh_all", "load_cross_document_entities", "load_entity_graph"]
+    finally:
+        window.close()

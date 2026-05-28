@@ -463,8 +463,15 @@ async def load_demo_data():
     return DemoWorkflow(UPLOAD_DIR).load_demo_data()
 
 @router.get("/reports/full", tags=["演示"], summary="导出全流程报告")
-async def full_report():
-    content = ReportWorkflow().build_full_report()
+async def full_report(format: str = Query(default="docx", pattern="^(docx|pdf)$")):
+    fmt = format.lower()
+    content = ReportWorkflow().build_full_report(fmt)
+    if fmt == "pdf":
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers=_attachment_headers("docfusion_full_report.pdf"),
+        )
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

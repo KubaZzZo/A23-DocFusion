@@ -134,8 +134,13 @@ class DocFusionApiClient:
     def document_version_diff(self, doc_id: int, version_id: int) -> dict[str, Any]:
         return self._request("GET", f"/documents/{doc_id}/versions/{version_id}/diff")
 
-    def download_full_report(self, destination: str | Path) -> Path:
-        return self._download_path("/reports/full", destination, default_filename="docfusion_full_report.docx")
+    def download_full_report(self, destination: str | Path, fmt: str = "docx") -> Path:
+        extension = "pdf" if fmt == "pdf" else "docx"
+        return self._download_path(
+            f"/reports/full?format={extension}",
+            destination,
+            default_filename=f"docfusion_full_report.{extension}",
+        )
 
     def articles(self, page: int = 1, limit: int = 50) -> list[dict[str, Any]]:
         return self._request("GET", "/articles", params={"page": page, "limit": limit})

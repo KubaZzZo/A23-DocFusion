@@ -87,6 +87,38 @@ def test_template_review_and_confirmed_fill(tmp_path, monkeypatch):
     assert confirmed.json()["result_download_url"].startswith("/api/outputs/")
 
 
+def test_template_review_marks_low_confidence_matches_for_manual_review(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    doc = DocumentDAO.create("contract.docx", "docx", str(tmp_path / "contract.docx"))
+    EntityDAO.create_batch(
+        doc.id,
+        [{"type": "organization", "value": "Possible Corp", "confidence": 0.62}],
+    )
+    template_path = tmp_path / "template.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["organization"])
+    sheet.append([None])
+    workbook.save(template_path)
+    template = TemplateDAO.create(
+        "template.xlsx",
+        str(template_path),
+        '{"field_names":["organization"],"fields":[{"field_name":"organization","sheet":"Sheet","row":2,"col":1}]}',
+    )
+
+    review = TestClient(app).post(
+        "/api/templates/fill/review",
+        json={"template_id": template.id, "document_ids": [doc.id]},
+        headers=_headers(),
+    )
+
+    assert review.status_code == 200
+    suggestion = review.json()["suggestions"][0]
+    assert suggestion["suggested_value"] == "Possible Corp"
+    assert suggestion["review_required"] is True
+    assert suggestion["status"] == "needs_review"
+
+
 def test_demo_report_and_document_diff_apis(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     client = TestClient(app)
@@ -101,6 +133,12 @@ def test_demo_report_and_document_diff_apis(tmp_path, monkeypatch):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert len(report.content) > 1000
+
+    pdf_report = client.get("/api/reports/full?format=pdf", headers=_headers())
+    assert pdf_report.status_code == 200
+    assert pdf_report.headers["content-type"].startswith("application/pdf")
+    assert pdf_report.content.startswith(b"%PDF")
+    assert len(pdf_report.content) > 500
 
     doc_path = tmp_path / "diff.docx"
     document = Document()

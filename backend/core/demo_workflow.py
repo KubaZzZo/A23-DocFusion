@@ -92,7 +92,12 @@ class DemoWorkflow:
 
 
 class ReportWorkflow:
-    def build_full_report(self) -> bytes:
+    def build_full_report(self, fmt: str = "docx") -> bytes:
+        if fmt.lower() == "pdf":
+            return self._build_pdf_report()
+        return self._build_docx_report()
+
+    def _build_docx_report(self) -> bytes:
         documents = DocumentDAO.get_all()
         entities = EntityDAO.get_all()
         cross_rows = EntityDAO.get_cross_document_entities(min_documents=2, limit=100)
@@ -141,3 +146,67 @@ class ReportWorkflow:
         buffer = BytesIO()
         doc.save(buffer)
         return buffer.getvalue()
+
+    def _build_pdf_report(self) -> bytes:
+        documents = DocumentDAO.get_all()
+        entities = EntityDAO.get_all()
+        cross_rows = EntityDAO.get_cross_document_entities(min_documents=2, limit=100)
+        type_counts = Counter(entity.entity_type for entity in entities)
+        lines = [
+            "DocFusion Full Workflow Report",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            f"Documents: {len(documents)}",
+            f"Entities: {len(entities)}",
+            "",
+            "Entity Type Counts:",
+        ]
+        lines.extend(f"- {entity_type}: {count}" for entity_type, count in sorted(type_counts.items()))
+        lines.append("")
+        lines.append("Cross Document Entities:")
+        if cross_rows:
+            for item in cross_rows:
+                docs = ", ".join(item.get("documents") or [])
+                lines.append(
+                    f"- {item.get('type', '')}: {item.get('value', '')} "
+                    f"({item.get('doc_count', '')} docs, {item.get('count', '')} mentions) {docs}"
+                )
+        else:
+            lines.append("- None")
+        return self._simple_pdf(lines)
+
+    @staticmethod
+    def _simple_pdf(lines: list[str]) -> bytes:
+        def esc(value: str) -> str:
+            return str(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+        text_ops = ["BT", "/F1 11 Tf", "50 790 Td"]
+        for index, line in enumerate(lines[:48]):
+            if index:
+                text_ops.append("0 -16 Td")
+            text_ops.append(f"({esc(line)}) Tj")
+        text_ops.append("ET")
+        stream = "\n".join(text_ops).encode("latin-1", errors="replace")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        ]
+        pdf = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for number, obj in enumerate(objects, start=1):
+            offsets.append(len(pdf))
+            pdf.extend(f"{number} 0 obj\n".encode("ascii"))
+            pdf.extend(obj)
+            pdf.extend(b"\nendobj\n")
+        xref = len(pdf)
+        pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+        pdf.extend(b"0000000000 65535 f \n")
+        for offset in offsets[1:]:
+            pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+        pdf.extend(
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
+        )
+        return bytes(pdf)
