@@ -1,6 +1,7 @@
 """云端LLM客户端（兼容OpenAI API格式）"""
 import json
 
+import httpx
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from llm.base import BaseLLM
 from llm.provider_presets import ProviderProfile, build_provider_profile
@@ -39,6 +40,10 @@ class CloudClient(BaseLLM):
             log.info(f"Cloud响应: {len(result)}字符")
             return result
         except Exception as e:
+            fallback_result = await self._chat_via_raw_http(messages, temperature, e)
+            if fallback_result is not None:
+                log.info(f"Cloud兼容响应: {len(fallback_result)}字符")
+                return fallback_result
             err_str = str(e)
             if "401" in err_str or "Unauthorized" in err_str:
                 msg = "API Key 无效或已过期，请在设置中检查"
@@ -52,6 +57,56 @@ class CloudClient(BaseLLM):
                 msg = f"云端API调用失败: {err_str}"
             log.error(msg)
             raise RuntimeError(msg)
+
+    async def _chat_via_raw_http(
+        self,
+        messages: list[dict],
+        temperature: float,
+        original_error: Exception,
+    ) -> str | None:
+        """Fallback for OpenAI-compatible gateways that return raw SSE text."""
+        err_str = str(original_error)
+        should_try = any(
+            marker in err_str
+            for marker in (
+                "Expecting value",
+                "Unsupported content type",
+                "text/event-stream",
+                "api_format",
+            )
+        )
+        if not should_try:
+            return None
+
+        base_url = str(self.profile.base_url).rstrip("/")
+        url = f"{base_url}/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.profile.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=120, trust_env=True) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+        except Exception:
+            return None
+
+        content_type = resp.headers.get("content-type", "")
+        body = resp.text
+        if "text/event-stream" in content_type or body.lstrip().startswith("data:"):
+            return self._extract_sse_text(body)
+        try:
+            return self._extract_text(resp.json())
+        except Exception:
+            return body
 
     @staticmethod
     def _extract_text(resp) -> str:
