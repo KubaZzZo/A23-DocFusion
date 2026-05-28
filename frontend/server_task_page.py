@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from PySide6.QtWidgets import (
     QFrame,
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -51,15 +52,20 @@ def build_server_task_panel(window) -> QFrame:
     task_config = QGridLayout()
     task_config.setHorizontalSpacing(10)
     task_config.setVerticalSpacing(8)
+    window.server_task_backend_mode = QComboBox()
+    window.server_task_backend_mode.addItem("本地任务服务", "local")
+    window.server_task_backend_mode.addItem("远程任务服务 HTTPS", "remote")
     window.server_task_url_input = QLineEdit(window.server_task_config.base_url)
     window.server_task_token_input = QLineEdit()
     window.server_task_token_input.setText(window.server_task_config.token)
     window.server_task_token_input.setEchoMode(QLineEdit.Password)
     window.server_task_token_input.setPlaceholderText("Bearer token")
-    task_config.addWidget(QLabel("服务器地址"), 0, 0)
-    task_config.addWidget(window.server_task_url_input, 0, 1)
-    task_config.addWidget(QLabel("Token"), 1, 0)
-    task_config.addWidget(window.server_task_token_input, 1, 1)
+    task_config.addWidget(QLabel("后端模式"), 0, 0)
+    task_config.addWidget(window.server_task_backend_mode, 0, 1)
+    task_config.addWidget(QLabel("服务器地址"), 1, 0)
+    task_config.addWidget(window.server_task_url_input, 1, 1)
+    task_config.addWidget(QLabel("Token"), 2, 0)
+    task_config.addWidget(window.server_task_token_input, 2, 1)
     task_layout.addLayout(task_config)
 
     task_config_actions = QHBoxLayout()

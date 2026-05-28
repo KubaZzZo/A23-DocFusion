@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from PySide6.QtCore import QThreadPool, QTimer, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut
@@ -1068,6 +1069,12 @@ class DocFusionWindow(QMainWindow):
         api_layout.setSpacing(14)
         api_layout.addWidget(self._panel_heading("DocFusion 后端 API", ""))
 
+        self.backend_mode = QComboBox()
+        self.backend_mode.addItem("本地后端", "local")
+        self.backend_mode.addItem("远程后端 HTTPS", "remote")
+        api_layout.addWidget(QLabel("后端模式"))
+        api_layout.addWidget(self.backend_mode)
+
         self.base_url_input = QLineEdit(self.client.base_url)
         api_layout.addWidget(QLabel("API 地址"))
         api_layout.addWidget(self.base_url_input)
@@ -1673,14 +1680,20 @@ class DocFusionWindow(QMainWindow):
         self._run_api("检测服务器任务", self._server_task_client().health, self._on_server_task_health)
 
     def save_server_task_settings(self) -> None:
+        base_url = self.server_task_url_input.text().strip().rstrip("/")
+        mode = self.server_task_backend_mode.currentData() if hasattr(self, "server_task_backend_mode") else "local"
+        if not self._validate_backend_url(base_url, mode):
+            self._show_backend_url_error("服务器任务地址", base_url)
+            return False
         config = ServerTaskConfig(
-            base_url=self.server_task_url_input.text().strip(),
+            base_url=base_url,
             token=self.server_task_token_input.text().strip(),
         )
         save_server_task_config(config, self.server_task_config_path)
         self.server_task_config = config
         self.server_task_connection_label.setText(f"服务器任务配置已保存：{self.server_task_config_path}")
         self.log(f"服务器任务配置已保存：{self.server_task_config_path}")
+        return True
 
     def check_server_task_tools(self) -> None:
         self._run_api("检查服务器工具", self._server_task_client().tools, self._on_server_task_tools)
@@ -1814,13 +1827,41 @@ class DocFusionWindow(QMainWindow):
             )
 
     def apply_api_url(self) -> None:
-        self.client.base_url = self.base_url_input.text().strip().rstrip("/")
+        base_url = self.base_url_input.text().strip().rstrip("/")
+        mode = self.backend_mode.currentData() if hasattr(self, "backend_mode") else "local"
+        if not self._validate_backend_url(base_url, mode):
+            self._show_backend_url_error("DocFusion API 地址", base_url)
+            return False
+        self.client.base_url = base_url
         self.log(f"API 地址已切换为 {self.client.base_url}")
         self.refresh_all()
+        return True
 
     def reset_api_url(self) -> None:
+        if hasattr(self, "backend_mode"):
+            self.backend_mode.setCurrentIndex(self.backend_mode.findData("local"))
         self.base_url_input.setText("http://127.0.0.1:8000/api")
         self.apply_api_url()
+
+    @staticmethod
+    def _validate_backend_url(url: str, mode: str | None) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+        host = (parsed.hostname or "").lower()
+        is_loopback = host in {"127.0.0.1", "localhost", "::1"}
+        if mode == "remote":
+            return parsed.scheme == "https" and not is_loopback
+        return is_loopback
+
+    def _show_backend_url_error(self, label: str, url: str) -> None:
+        message = f"{label}无效：本地模式只能使用 localhost/127.0.0.1；远程模式必须使用 HTTPS 域名。"
+        self.log(f"{message} 当前值：{url}")
+        if hasattr(self, "settings_status_text"):
+            self.settings_status_text.setText(message)
+        if hasattr(self, "server_task_connection_label"):
+            self.server_task_connection_label.setText(message)
+        self.show_toast(message, success=False)
 
     def load_provider_settings(self) -> None:
         self._run_api("加载 Provider 配置", load_llm_provider_settings, self._apply_provider_settings_to_form)
