@@ -22,8 +22,15 @@ class BaseLLM(ABC):
             return cached
 
         messages = [
-            {"role": "system", "content": f"你是一个信息提取助手，请严格按JSON格式输出结果，不要输出其他内容。\n\n{UNTRUSTED_INPUT_NOTICE}"},
-            {"role": "user", "content": f"{prompt}\n\n文本内容：\n{wrap_untrusted_input(text)}"},
+            {
+                "role": "system",
+                "content": (
+                    "你是一个信息提取助手，请严格按JSON格式输出结果，不要输出其他内容。\n\n"
+                    f"{UNTRUSTED_INPUT_NOTICE}\n\n"
+                    f"{prompt}"
+                ),
+            },
+            {"role": "user", "content": f"文本内容：\n{wrap_untrusted_input(text)}"},
         ]
         result = await self.chat(messages)
         parsed = parse_json_response(result)

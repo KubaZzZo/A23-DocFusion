@@ -43,7 +43,23 @@ def batch_extract_documents(paths: list[str], progress: Callable[[dict], None] |
             try:
                 uploaded = workflow.upload_document(path.name, path.read_bytes())
                 parsed = workflow.parse_document(uploaded["id"])
-                extracted = loop.run_until_complete(workflow.extract_entities(uploaded["id"], force=True))
+                def extraction_progress(event: dict, filename: str = path.name) -> None:
+                    if progress:
+                        message = event.get("message") or ""
+                        progress(
+                            {
+                                "current": index,
+                                "total": total,
+                                "message": f"{filename}: {message}",
+                                "stage": event.get("stage"),
+                                "chunk_current": event.get("current"),
+                                "chunk_total": event.get("total"),
+                            }
+                        )
+
+                extracted = loop.run_until_complete(
+                    workflow.extract_entities(uploaded["id"], force=True, progress=extraction_progress)
+                )
                 count = extracted.get("entities_count", 0)
                 total_entities += count
                 successes.append(

@@ -77,6 +77,15 @@ VERIFY_PROMPT = """你是一个实体验证专家。请根据原文上下文，�
 CONFIDENCE_THRESHOLD = 0.75
 EXTRACT_CACHE_PROMPT = "entity_extract:v2"
 MAX_CHUNK_CANDIDATES = 3
+CONCISE_EXTRACT_PROMPT = """提取文本中的关键实体，严格返回 JSON：
+{
+  "entities": [
+    {"type": "person|organization|date|amount|phone|email|address|id_number|custom", "value": "原文中的实体值", "context": "原文片段", "confidence": 0.95}
+  ],
+  "summary": "一句话摘要",
+  "topic": "主题"
+}
+规则：只提取原文明确出现的信息；不要推测；同一实体只保留最完整表达。"""
 REGEX_ENTITY_PATTERNS = {
     "email": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
     "phone": r"(?<!\d)(?:1[3-9]\d{9}|0\d{2,3}-?\d{7,8}|400-?\d{3}-?\d{4})(?!\d)",
@@ -96,35 +105,44 @@ CHUNK_KEYWORDS = {
 
 
 class EntityExtractor:
-    def __init__(self, provider: str = None, enable_verify: bool = True):
+    def __init__(self, provider: str = None, enable_verify: bool = True, prompt_profile: str = "auto"):
         self.llm = get_llm(provider)
         self.chunker = TextChunker()
         self.enable_verify = enable_verify
+        self.prompt_profile = prompt_profile
 
-    async def extract(self, text: str, force: bool = False) -> dict:
+    async def extract(self, text: str, force: bool = False, progress=None) -> dict:
         """从文本中提取实体，支持长文本自动分块 + 多轮验证"""
+        self._emit_progress(progress, "started", 0, 0, "开始实体提取")
         if not text or not text.strip():
             log.warning("输入文本为空，跳过提取")
+            self._emit_progress(progress, "completed", 0, 0, "输入为空")
             return {"entities": [], "summary": "", "topic": ""}
 
         cache_key_prefix = self._cache_key_prefix()
         cached = None if force else get_cached(cache_key_prefix, text)
         if cached and not cached.get("parse_error"):
             log.info("命中文档级实体提取缓存，跳过LLM抽取")
+            self._emit_progress(progress, "completed", 1, 1, f"命中缓存，已发现 {len(cached.get('entities', []))} 个实体")
             return cached
 
         chunks = self.chunker.chunk(text)
         chunks = self._select_relevant_chunks(chunks)
+        prompt = self._extract_prompt()
 
         if len(chunks) == 1:
-            result = await self.llm.extract_json(EXTRACT_PROMPT, chunks[0])
+            self._emit_progress(progress, "chunk", 1, 1, "正在处理第 1/1 块")
+            result = await self.llm.extract_json(prompt, chunks[0])
         else:
-            # 多块并发提取
-            tasks = [self.llm.extract_json(EXTRACT_PROMPT, chunk) for chunk in chunks]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = []
+            total = len(chunks)
+            for index, chunk in enumerate(chunks, start=1):
+                self._emit_progress(progress, "chunk", index, total, f"正在处理第 {index}/{total} 块")
+                results.append(await self.llm.extract_json(prompt, chunk))
             result = self._merge_results(results)
 
         if result.get("parse_error"):
+            self._emit_progress(progress, "completed", len(chunks), len(chunks), "实体提取解析失败")
             return result
 
         result = normalize_entity_result(result)
@@ -136,7 +154,23 @@ class EntityExtractor:
             result["entities"] = self._merge_entities(result.get("entities", []), [])
 
         set_cached(cache_key_prefix, text, result)
+        self._emit_progress(progress, "completed", len(chunks), len(chunks), f"实体提取完成，已发现 {len(result.get('entities', []))} 个实体")
         return result
+
+    def _extract_prompt(self) -> str:
+        return CONCISE_EXTRACT_PROMPT if self._prompt_profile() == "concise" else EXTRACT_PROMPT
+
+    def _prompt_profile(self) -> str:
+        if self.prompt_profile in {"concise", "detailed"}:
+            return self.prompt_profile
+        model = str(getattr(self.llm, "model", "")).lower()
+        small_markers = ("7b", "8b", "qwen2.5:7b", "mini")
+        return "concise" if any(marker in model for marker in small_markers) else "detailed"
+
+    @staticmethod
+    def _emit_progress(callback, stage: str, current: int, total: int, message: str) -> None:
+        if callback:
+            callback({"stage": stage, "current": current, "total": total, "message": message})
 
     def _cache_key_prefix(self) -> str:
         profile = getattr(self.llm, "profile", None)

@@ -72,13 +72,13 @@ class DocumentWorkflow:
             response["text"] = result["text"]
         return response
 
-    async def extract_entities(self, doc_id: int, force: bool = False) -> dict:
+    async def extract_entities(self, doc_id: int, force: bool = False, progress=None) -> dict:
         doc = DocumentDAO.get_by_id(doc_id)
         if not doc or not doc.raw_text:
             raise WorkflowValidationError("文档未解析，请先调用parse接口")
 
         extractor = EntityExtractor()
-        result = await extractor.extract(doc.raw_text, force=force)
+        result = await extractor.extract(doc.raw_text, force=force, progress=progress)
         entities = result.get("entities", [])
         EntityDAO.create_batch(doc_id, entities)
         return {"doc_id": doc_id, "entities_count": len(entities), "summary": result.get("summary", "")}

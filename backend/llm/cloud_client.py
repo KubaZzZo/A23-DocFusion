@@ -1,4 +1,5 @@
 """云端LLM客户端（兼容OpenAI API格式）"""
+import asyncio
 import json
 
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
@@ -8,6 +9,7 @@ from llm.runtime_config import get_provider_config
 from logger import get_logger
 
 log = get_logger("llm.cloud")
+TRANSIENT_ERROR_MARKERS = ("429", "rate limit", "timeout", "temporarily", "connection", "503", "502", "504")
 
 
 class CloudClient(BaseLLM):
@@ -29,15 +31,27 @@ class CloudClient(BaseLLM):
             msg = f"{self.profile.label} API Key 未配置，请在设置中填写"
             log.error(msg)
             raise ConnectionError(msg)
+        last_error = None
+        for attempt in range(3):
+            try:
+                resp = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                )
+                result = self._extract_text(resp)
+                log.info(f"Cloud响应: {len(result)}字符")
+                return result
+            except Exception as exc:
+                last_error = exc
+                if attempt >= 2 or not self._is_transient_error(exc):
+                    break
+                delay = 2 ** attempt
+                log.warning("Cloud请求遇到临时错误，%.0fs 后重试第 %s 次: %s", delay, attempt + 2, exc)
+                await asyncio.sleep(delay)
+
         try:
-            resp = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-            )
-            result = self._extract_text(resp)
-            log.info(f"Cloud响应: {len(result)}字符")
-            return result
+            raise last_error
         except Exception as e:
             err_str = str(e)
             if "401" in err_str or "Unauthorized" in err_str:
@@ -52,6 +66,11 @@ class CloudClient(BaseLLM):
                 msg = f"云端API调用失败: {err_str}"
             log.error(msg)
             raise RuntimeError(msg)
+
+    @staticmethod
+    def _is_transient_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return any(marker in text for marker in TRANSIENT_ERROR_MARKERS)
 
     @staticmethod
     def _extract_text(resp) -> str:
