@@ -1,0 +1,30 @@
+[Unit]
+Description=DocFusion standalone server toolkit API
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=simple
+User=docfusion
+Group=docfusion
+EnvironmentFile=-/etc/docfusion/docfusion-toolkit.env
+ExecStartPre=-/usr/bin/docker rm -f docfusion-toolkit-api
+ExecStart=/usr/bin/docker run --rm --name docfusion-toolkit-api \
+  --restart no \
+  --memory 1g \
+  --cpus 1.5 \
+  --env-file /etc/docfusion/docfusion-toolkit.env \
+  -e DOCFUSION_HOST=0.0.0.0 \
+  -e DOCFUSION_API_TOKEN_FILE=/run/secrets/docfusion_toolkit_token \
+  -e DOCFUSION_TASKS_ROOT=/var/docfusion/tasks \
+  -p 127.0.0.1:8010:8010 \
+  -v /etc/docfusion/toolkit-token.txt:/run/secrets/docfusion_toolkit_token:ro \
+  -v /data/docfusion/tasks:/var/docfusion/tasks \
+  docfusion-toolkit-api:latest
+ExecStop=/usr/bin/docker stop docfusion-toolkit-api
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

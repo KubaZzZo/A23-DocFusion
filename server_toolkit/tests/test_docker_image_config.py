@@ -17,4 +17,4 @@ def test_readme_vps_run_command_avoids_public_listener_and_env_token():
 
     assert "-e DOCFUSION_API_TOKEN=" not in text
     assert "DOCFUSION_API_TOKEN_FILE" in text
-    assert "DOCFUSION_HOST=127.0.0.1" in text
+    assert "-p 127.0.0.1:8010:8010" in text

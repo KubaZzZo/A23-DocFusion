@@ -97,6 +97,26 @@ def test_llm_runtime_config_snapshot_is_isolated():
     assert LLM_CONFIG["openai"]["model"] != "changed-in-test"
 
 
+def test_openai_api_key_environment_variable_overrides_settings_store(monkeypatch):
+    from llm import factory
+    from llm.runtime_config import update_llm_config
+
+    captured = {}
+
+    class FakeCloudClient:
+        def __init__(self, profile):
+            captured["profile"] = profile
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setattr(factory, "CloudClient", FakeCloudClient)
+    update_llm_config({"provider": "openai", "openai_key": "base64:c2V0dGluZ3Mta2V5"})
+    factory.clear_llm_cache()
+
+    factory.get_llm("openai")
+
+    assert captured["profile"].api_key == "env-key"
+
+
 def test_api_workflows_can_be_overridden_with_dependency_injection():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

@@ -174,19 +174,19 @@ printf '%s\n' 'change-this-token' > /opt/docfusion-toolkit/token.txt
 chmod 600 /opt/docfusion-toolkit/token.txt
 docker run -d --name docfusion-toolkit-api \
   --restart unless-stopped \
-  --network host \
   --memory 1g \
   --cpus 1.5 \
   --env-file /opt/docfusion-toolkit/.env \
-  -e DOCFUSION_HOST=127.0.0.1 \
+  -e DOCFUSION_HOST=0.0.0.0 \
   -e DOCFUSION_API_TOKEN_FILE=/run/secrets/docfusion_toolkit_token \
   -v /opt/docfusion-toolkit/token.txt:/run/secrets/docfusion_toolkit_token:ro \
   -e DOCFUSION_TASKS_ROOT=/var/docfusion/tasks \
+  -p 127.0.0.1:8010:8010 \
   -v /data/docfusion/tasks:/var/docfusion/tasks \
   docfusion-toolkit-api:latest
 ```
 
-This uses host networking only with `DOCFUSION_HOST=127.0.0.1`, so the API listens on loopback rather than the public interface. Publish it through a reverse proxy or SSH tunnel for demos. The existing `new-api` container stays on port `3000`.
+This keeps Docker on the default bridge network and maps the service only to host loopback. Publish it through nginx or an SSH tunnel for demos. The existing `new-api` container stays on port `3000`.
 
 Health check:
 

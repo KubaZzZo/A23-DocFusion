@@ -1,0 +1,24 @@
+[Unit]
+Description=DocFusion main FastAPI backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=docfusion
+Group=docfusion
+WorkingDirectory=/opt/docfusion/docfusion_desktop/backend
+EnvironmentFile=-/etc/docfusion/docfusion-api.env
+Environment=DOCFUSION_HOST=127.0.0.1
+Environment=DOCFUSION_PORT=8000
+ExecStart=/opt/docfusion/venv/bin/python -m api.server
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/docfusion/docfusion_desktop/backend/data /var/log/docfusion
+
+[Install]
+WantedBy=multi-user.target

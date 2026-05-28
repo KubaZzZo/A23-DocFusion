@@ -31,10 +31,11 @@ def get_llm(provider: str | None = None) -> BaseLLM:
         return _cached_client("ollama", config, lambda: OllamaClient())
     if kind == "openai_compatible":
         config = get_provider_config("openai")
-        if not config.get("api_key") and config.get("api_key_ref"):
+        env_api_key = os.getenv("OPENAI_API_KEY", "")
+        if env_api_key:
+            config["api_key"] = env_api_key
+        elif not config.get("api_key") and config.get("api_key_ref"):
             config["api_key"] = decode_key(config["api_key_ref"])
-        if not config.get("api_key"):
-            config["api_key"] = os.getenv("OPENAI_API_KEY", "")
         if provider:
             config["vendor"] = provider
         return _cached_client("openai_compatible", config, lambda: CloudClient(build_provider_profile(config)))
