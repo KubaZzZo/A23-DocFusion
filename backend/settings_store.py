@@ -12,6 +12,7 @@ from logger import get_logger
 DEFAULT_SETTINGS_FILE = BASE_DIR / "data" / "settings.json"
 log = get_logger("settings_store")
 KEY_PREFIX = "dpapi:"
+FALLBACK_KEY_PREFIX = "base64:"
 
 
 class _DataBlob(ctypes.Structure):
@@ -96,7 +97,8 @@ def encode_key(key: str) -> str:
         return ""
     if _dpapi_available():
         return _protect_with_dpapi(key)
-    raise RuntimeError("Secure API key storage requires Windows DPAPI")
+    log.warning("DPAPI unavailable; storing API key with Base64 obfuscation only")
+    return FALLBACK_KEY_PREFIX + base64.b64encode(key.encode("utf-8")).decode("ascii")
 
 
 def decode_key(encoded: str) -> str:
@@ -105,6 +107,12 @@ def decode_key(encoded: str) -> str:
         return ""
     if encoded.startswith(KEY_PREFIX):
         return _unprotect_with_dpapi(encoded)
+    if encoded.startswith(FALLBACK_KEY_PREFIX):
+        try:
+            return base64.b64decode(encoded[len(FALLBACK_KEY_PREFIX):].encode("ascii")).decode("utf-8")
+        except Exception:
+            log.warning("Ignoring invalid fallback API key value in settings")
+            return ""
     try:
         return base64.b64decode(encoded.encode("utf-8")).decode("utf-8")
     except Exception:

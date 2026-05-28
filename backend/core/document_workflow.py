@@ -100,6 +100,7 @@ class DocumentWorkflow:
                 note=command,
             )
             result["version"] = self._serialize_version(version)
+            self.parse_document(doc_id)
         return {"command": parsed, "result": result}
 
     def list_versions(self, doc_id: int) -> list[dict]:
@@ -119,6 +120,7 @@ class DocumentWorkflow:
         if not source.is_file():
             raise WorkflowNotFoundError("版本文件不存在")
         shutil.copyfile(source, doc.file_path)
+        self.parse_document(doc_id)
         return {"success": True, "doc_id": doc_id, "version_id": version_id, "message": "版本已回滚"}
 
     @staticmethod

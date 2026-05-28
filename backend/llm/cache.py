@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from config import DATA_DIR
@@ -13,13 +14,15 @@ log = logging.getLogger(__name__)
 # 内存缓存
 MAX_MEMORY_CACHE_SIZE = 300
 _memory_cache: OrderedDict[str, dict] = OrderedDict()
+_memory_cache_lock = threading.RLock()
 
 
 def _remember(key: str, data: dict):
-    _memory_cache[key] = data
-    _memory_cache.move_to_end(key)
-    while len(_memory_cache) > MAX_MEMORY_CACHE_SIZE:
-        _memory_cache.popitem(last=False)
+    with _memory_cache_lock:
+        _memory_cache[key] = data
+        _memory_cache.move_to_end(key)
+        while len(_memory_cache) > MAX_MEMORY_CACHE_SIZE:
+            _memory_cache.popitem(last=False)
 
 
 def _hash_key(prompt: str, text: str) -> str:
@@ -33,9 +36,10 @@ def get_cached(prompt: str, text: str) -> dict | None:
     key = _hash_key(prompt, text)
 
     # 内存缓存
-    if key in _memory_cache:
-        _memory_cache.move_to_end(key)
-        return _memory_cache[key]
+    with _memory_cache_lock:
+        if key in _memory_cache:
+            _memory_cache.move_to_end(key)
+            return _memory_cache[key]
 
     # 文件缓存
     cache_file = CACHE_DIR / f"{key}.json"
@@ -64,7 +68,8 @@ def set_cached(prompt: str, text: str, result: dict):
 
 def clear_cache():
     """清空所有缓存"""
-    _memory_cache.clear()
+    with _memory_cache_lock:
+        _memory_cache.clear()
     for f in CACHE_DIR.glob("*.json"):
         try:
             f.chmod(0o666)

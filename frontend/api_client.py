@@ -253,7 +253,7 @@ class DocFusionApiClient:
         body = b"".join(
             [
                 f"--{boundary}\r\n".encode("utf-8"),
-                f'Content-Disposition: form-data; name="file"; filename="{source.name}"\r\n'.encode("utf-8"),
+                f"{self._multipart_content_disposition('file', source.name)}\r\n".encode("utf-8"),
                 f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
                 file_bytes,
                 f"\r\n--{boundary}--\r\n".encode("utf-8"),
@@ -285,7 +285,7 @@ class DocFusionApiClient:
             parts.extend(
                 [
                     f"--{boundary}\r\n".encode("utf-8"),
-                    f'Content-Disposition: form-data; name="files"; filename="{source.name}"\r\n'.encode("utf-8"),
+                    f"{self._multipart_content_disposition('files', source.name)}\r\n".encode("utf-8"),
                     f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
                     source.read_bytes(),
                     b"\r\n",
@@ -348,6 +348,15 @@ class DocFusionApiClient:
             return None
         match = re.search(r'filename="?([^";]+)"?', value)
         return match.group(1) if match else None
+
+    @staticmethod
+    def _multipart_content_disposition(field_name: str, filename: str) -> str:
+        safe_field = urllib.parse.quote(str(field_name), safe="")
+        safe_filename = urllib.parse.quote(Path(str(filename)).name, safe="")
+        return (
+            f'Content-Disposition: form-data; name="{safe_field}"; '
+            f'filename="{safe_filename}"; filename*=UTF-8\'\'{safe_filename}'
+        )
 
     @staticmethod
     def _format_http_error(exc: urllib.error.HTTPError) -> str:

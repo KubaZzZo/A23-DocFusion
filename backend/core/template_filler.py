@@ -97,10 +97,14 @@ class TemplateFiller:
         shutil.copyfile(template_path, output_path)
         output_path.chmod(0o666)
 
-        if suffix == ".xlsx":
-            self._fill_xlsx(str(output_path), analysis["fields"], fill_map)
-        elif suffix == ".docx":
-            self._fill_docx(str(output_path), analysis["fields"], fill_map)
+        try:
+            if suffix == ".xlsx":
+                self._fill_xlsx(str(output_path), analysis["fields"], fill_map)
+            elif suffix == ".docx":
+                self._fill_docx(str(output_path), analysis["fields"], fill_map)
+        except Exception:
+            output_path.unlink(missing_ok=True)
+            raise
 
         field_names = analysis["field_names"]
         filled_count = sum(1 for field_name in field_names if field_name in fill_map)

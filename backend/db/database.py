@@ -357,8 +357,7 @@ class CrawledArticleDAO:
         with session_scope() as s:
             article = CrawledArticle(
                 title=title, author=author, source=source, url=url,
-                publish_date=publish_date, content=content, category=category,
-                crawled_at=datetime.now()
+                publish_date=publish_date, content=content, category=category
             )
             s.add(article)
             s.flush()
@@ -377,8 +376,7 @@ class CrawledArticleDAO:
                     url=a.get("url", ""),
                     publish_date=a.get("publish_date", ""),
                     content=a.get("content", ""),
-                    category=a.get("category", ""),
-                    crawled_at=datetime.now()
+                    category=a.get("category", "")
                 )
                 s.add(article)
                 result.append(article)

@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Literal
@@ -20,6 +21,8 @@ from config import DATA_DIR
 
 BACKUP_DIR = DATA_DIR / "backups"
 BACKUP_DIR.mkdir(exist_ok=True)
+_FILE_LOCKS: dict[str, threading.RLock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
 
 DEFAULT_CODEX_COMMAND_DIRS = (
     DATA_DIR.parent / "codex_tools",
@@ -450,22 +453,33 @@ user_command:
         if not handler:
             return {"success": False, "message": f"Unsupported action: {action}"}
 
-        backup_path = None if action == "extract" else self._backup(doc_path)
+        with self._lock_for_path(doc_path):
+            backup_path = None if action == "extract" else self._backup(doc_path)
 
-        try:
-            params = dict(command.get("params", {}))
-            if action in {"format", "extract"} and "target" in command and "target" not in params:
-                params["target"] = command["target"]
-            result = handler(doc_path, params)
-            if backup_path:
-                result["backup_path"] = str(backup_path)
-            return result
-        except Exception as e:
-            # Restore the original file when a mutable operation fails.
-            if backup_path and Path(backup_path).exists():
-                shutil.copyfile(backup_path, doc_path)
-                Path(doc_path).chmod(0o666)
-            return {"success": False, "message": str(e)}
+            try:
+                params = dict(command.get("params", {}))
+                if action in {"format", "extract"} and "target" in command and "target" not in params:
+                    params["target"] = command["target"]
+                result = handler(doc_path, params)
+                if backup_path:
+                    result["backup_path"] = str(backup_path)
+                return result
+            except Exception as e:
+                # Restore the original file when a mutable operation fails.
+                if backup_path and Path(backup_path).exists():
+                    shutil.copyfile(backup_path, doc_path)
+                    Path(doc_path).chmod(0o666)
+                return {"success": False, "message": str(e)}
+
+    @staticmethod
+    def _lock_for_path(doc_path: str | Path) -> threading.RLock:
+        key = str(Path(doc_path).resolve(strict=False))
+        with _FILE_LOCKS_GUARD:
+            lock = _FILE_LOCKS.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                _FILE_LOCKS[key] = lock
+            return lock
 
     @classmethod
     def _validate_command(cls, command: dict) -> str:

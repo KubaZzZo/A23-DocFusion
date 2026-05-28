@@ -167,7 +167,7 @@ class EntityExtractor:
             for e in low_conf
         )
         # 截取原文前3000字作为验证上下文
-        context_text = original_text[:3000]
+        context_text = self._verification_context(original_text, low_conf)
         verify_result = await self.llm.extract_json(VERIFY_PROMPT.format(entities=entities_str), context_text)
 
         if verify_result.get("parse_error"):
@@ -239,6 +239,35 @@ class EntityExtractor:
     @staticmethod
     def _context_window(text: str, start: int, end: int, radius: int = 20) -> str:
         return text[max(0, start - radius): min(len(text), end + radius)].strip()
+
+    @staticmethod
+    def _verification_context(text: str, entities: list[dict], max_chars: int = 6000, radius: int = 600) -> str:
+        snippets: list[str] = []
+        seen: set[str] = set()
+
+        for entity in entities:
+            candidates = [str(entity.get("value") or ""), str(entity.get("context") or "")]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                index = text.find(candidate)
+                if index < 0:
+                    continue
+                snippet = text[max(0, index - radius): min(len(text), index + len(candidate) + radius)].strip()
+                if snippet and snippet not in seen:
+                    seen.add(snippet)
+                    snippets.append(snippet)
+                    break
+
+        if not snippets:
+            return text[:max_chars]
+
+        combined = "\n\n---\n\n".join(snippets)
+        if len(combined) < min(max_chars, len(text)):
+            prefix = text[: min(1200, max_chars - len(combined))]
+            if prefix and prefix not in seen:
+                combined = f"{prefix}\n\n---\n\n{combined}"
+        return combined[:max_chars]
 
     @staticmethod
     def _merge_entities(primary: list[dict], secondary: list[dict]) -> list[dict]:

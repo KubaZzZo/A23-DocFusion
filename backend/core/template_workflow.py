@@ -1,5 +1,6 @@
 """Template workflow orchestration shared by API and UI callers."""
 import asyncio
+import threading
 import json
 import shutil
 from pathlib import Path
@@ -84,7 +85,26 @@ class TemplateWorkflow:
 
     def run_fill_task(self, task_id: int, template_path: str, entities: list[dict]):
         """Synchronous wrapper for FastAPI BackgroundTasks."""
-        asyncio.run(self.do_fill(task_id, template_path, entities))
+        coro = self.do_fill(task_id, template_path, entities)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
+            return
+
+        error: list[BaseException] = []
+
+        def runner():
+            try:
+                asyncio.run(coro)
+            except BaseException as exc:
+                error.append(exc)
+
+        thread = threading.Thread(target=runner, name="docfusion-template-fill", daemon=False)
+        thread.start()
+        thread.join()
+        if error:
+            raise error[0]
 
     async def fill_confirmed_map(self, template_path: str, fill_map: dict) -> dict:
         path = Path(template_path)
