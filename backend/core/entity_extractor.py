@@ -5,6 +5,7 @@ from llm import get_llm
 from llm.cache import get_cached, set_cached
 from llm.json_utils import normalize_entity_result
 from core.text_chunker import TextChunker
+from core.llm_budget import truncate_for_llm, should_fallback
 from logger import get_logger
 
 log = get_logger("core.extractor")
@@ -76,12 +77,23 @@ VERIFY_PROMPT = """你是一个实体验证专家。请根据原文上下文，�
 # 低于此阈值的实体将进入二轮验证
 CONFIDENCE_THRESHOLD = 0.75
 EXTRACT_CACHE_PROMPT = "entity_extract:v2"
-MAX_CHUNK_CANDIDATES = 3
+MAX_CHUNK_CANDIDATES = 8
 REGEX_ENTITY_PATTERNS = {
     "email": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-    "phone": r"(?<!\d)(?:1[3-9]\d{9}|0\d{2,3}-?\d{7,8}|400-?\d{3}-?\d{4})(?!\d)",
-    "amount": r"(?:￥|¥)?\d+(?:,\d{3})*(?:\.\d+)?\s*(?:万元|亿元|元|人民币|美元|万|亿)",
-    "date": r"\d{4}年\d{1,2}月\d{1,2}日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}",
+    "phone": r"(?<!\d)(?:1[3-9]\d{9}|0\d{2,3}-?\d{7,8}|400-?\d{3}-?\d{4}|\+\d{1,3}[\s-]?\d{1,14})(?!\d)",
+    "amount": (
+        r"(?:￥|¥|USD|\$)?\d+(?:,\d{3})*(?:\.\d+)?\s*(?:万元|亿元|元|人民币|美元|万|亿|USD|dollars?)"
+        r"|[壹贰叁肆伍陆柒捌玖拾佰仟万萬亿億零]+元(?:整|[角分壹贰叁肆伍陆柒捌玖拾零]+)*"
+    ),
+    "date": (
+        r"\d{4}年\d{1,2}月\d{1,2}日"
+        r"|\d{4}年\d{1,2}月"
+        r"|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+        r"|\d{1,2}/\d{1,2}/\d{2,4}"
+        r"|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}"
+        r"|[一二三四五六七八九十]+月[一二三四五六七八九十]+日"
+    ),
+    "id_number": r"(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)",
 }
 CHUNK_KEYWORDS = {
     "person": ("姓名", "联系人", "负责人", "经办人", "申请人", "代表"),
@@ -96,8 +108,8 @@ CHUNK_KEYWORDS = {
 
 
 class EntityExtractor:
-    def __init__(self, provider: str = None, enable_verify: bool = True):
-        self.llm = get_llm(provider)
+    def __init__(self, provider: str = None, enable_verify: bool = True, llm_client=None):
+        self.llm = llm_client or get_llm(provider)
         self.chunker = TextChunker()
         self.enable_verify = enable_verify
 
@@ -115,12 +127,12 @@ class EntityExtractor:
 
         chunks = self.chunker.chunk(text)
         chunks = self._select_relevant_chunks(chunks)
+        chunks = [truncate_for_llm(chunk) for chunk in chunks]
 
         if len(chunks) == 1:
-            result = await self.llm.extract_json(EXTRACT_PROMPT, chunks[0])
+            result = await self._extract_with_fallback(chunks[0])
         else:
-            # 多块并发提取
-            tasks = [self.llm.extract_json(EXTRACT_PROMPT, chunk) for chunk in chunks]
+            tasks = [self._extract_with_fallback(chunk) for chunk in chunks]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             result = self._merge_results(results)
 
@@ -166,8 +178,8 @@ class EntityExtractor:
             f"- [{e.get('type')}] {e.get('value')} (上下文: {e.get('context', '')}, 置信度: {e.get('confidence', 'N/A')})"
             for e in low_conf
         )
-        # 截取原文前3000字作为验证上下文
-        context_text = original_text[:3000]
+        # 使用完整原文作为验证上下文（LLM会自动处理长文本）
+        context_text = original_text
         verify_result = await self.llm.extract_json(VERIFY_PROMPT.format(entities=entities_str), context_text)
 
         if verify_result.get("parse_error"):
@@ -289,3 +301,14 @@ class EntityExtractor:
             "summary": " ".join(summaries) if summaries else "",
             "topic": next((r.get("topic", "") for r in results if isinstance(r, dict) and not r.get("parse_error")), ""),
         }
+
+    async def _extract_with_fallback(self, chunk: str) -> dict:
+        """Extract entities with fallback to regex-only on LLM failure."""
+        try:
+            return await self.llm.extract_json(EXTRACT_PROMPT, chunk)
+        except Exception as e:
+            if should_fallback(e):
+                log.warning(f"LLM调用失败，降级为正则提取: {e}")
+                entities = self._extract_regex_entities(chunk)
+                return {"entities": entities, "summary": "", "topic": "", "fallback": True}
+            raise

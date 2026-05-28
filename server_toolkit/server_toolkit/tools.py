@@ -54,6 +54,7 @@ def format_docx(args: dict[str, Any]) -> dict[str, Any]:
     try:
         from docx import Document
         from docx.shared import Cm
+        from docx.shared import RGBColor
         from docx.shared import Pt
     except ImportError as exc:
         raise ToolError("python-docx is required for format-docx") from exc
@@ -68,6 +69,9 @@ def format_docx(args: dict[str, Any]) -> dict[str, Any]:
     body_font = args.get("body_font")
     body_size = args.get("body_size")
     line_spacing = args.get("line_spacing")
+    first_line_bold = bool(args.get("first_line_bold"))
+    first_line_underline = bool(args.get("first_line_underline"))
+    first_line_color = args.get("first_line_color")
 
     margin_map = {
         "margin_top_cm": "top_margin",
@@ -97,8 +101,34 @@ def format_docx(args: dict[str, Any]) -> dict[str, Any]:
                 if body_size:
                     run.font.size = Pt(float(body_size))
 
+    if first_line_bold or first_line_underline or first_line_color:
+        first_paragraph = next((paragraph for paragraph in doc.paragraphs if paragraph.text.strip()), None)
+        if first_paragraph is not None:
+            if not first_paragraph.runs:
+                first_paragraph.add_run(first_paragraph.text)
+            for run in first_paragraph.runs:
+                if first_line_bold:
+                    run.font.bold = True
+                if first_line_underline:
+                    run.font.underline = True
+                color = _parse_hex_color(first_line_color)
+                if color:
+                    run.font.color.rgb = RGBColor(*color)
+
     doc.save(str(output))
     return {"output": str(output)}
+
+
+def _parse_hex_color(value: Any) -> tuple[int, int, int] | None:
+    if not value:
+        return None
+    text = str(value).strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+    except ValueError:
+        return None
 
 
 def merge_files(args: dict[str, Any]) -> dict[str, Any]:

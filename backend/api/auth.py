@@ -43,6 +43,10 @@ def _is_local_client(request: Request) -> bool:
     return bool(client and client.host in LOCAL_CLIENTS)
 
 
+def _remote_api_enabled() -> bool:
+    return os.getenv("DOCFUSION_ALLOW_REMOTE_API", "").strip().lower() in {"1", "true", "yes"}
+
+
 def _is_trusted_origin(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and parsed.hostname in TRUSTED_ORIGIN_HOSTS
@@ -65,7 +69,7 @@ async def require_local_bearer_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> None:
     """Require loopback access and the local bearer token for API endpoints."""
-    if not _is_local_client(request):
+    if not _is_local_client(request) and not _remote_api_enabled():
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API access is limited to localhost")
     _validate_browser_origin(request)
 

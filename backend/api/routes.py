@@ -1,7 +1,7 @@
 """FastAPI路由定义"""
 import io
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from api.auth import require_local_bearer_token
 from config import MAX_UPLOAD_SIZE
@@ -11,7 +11,7 @@ from core.entity_workflow import EntityWorkflow
 from core.statistics_workflow import StatisticsWorkflow
 from core.template_workflow import TemplateWorkflow
 from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
-from db.database import FillTaskDAO
+from db.database import DocumentDAO, FillTaskDAO
 
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_local_bearer_token)])
@@ -72,6 +72,15 @@ async def delete_document(doc_id: int):
         return document_workflow.delete_document(doc_id)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
+
+
+@router.get("/documents/{doc_id}/download", tags=["文档管理"], summary="下载文档")
+async def download_document(doc_id: int):
+    """Download the current stored document file."""
+    doc = DocumentDAO.get_by_id(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    return FileResponse(doc.file_path, filename=doc.filename)
 
 
 @router.post("/documents/upload", tags=["文档管理"], summary="上传文档")
@@ -193,6 +202,103 @@ async def get_article(article_id: int):
     """获取单篇爬取文章的完整内容"""
     try:
         return article_workflow.get_article(article_id)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
+
+
+# --- 工作流串联 (三个模块的端到端流程) ---
+
+class WorkflowRequest(BaseModel):
+    doc_ids: list[int] = Field(default_factory=list, min_length=1)
+    template_id: int | None = None
+    format_instruction: str = ""
+    include_fusion: bool = True
+    report_description: str = ""
+
+
+@router.post("/workflow/extract-and-fill", tags=["工作流"], summary="提取实体并填写模板")
+async def workflow_extract_and_fill(req: WorkflowRequest):
+    """Module 2+3: 从文档提取实体 → 填写模板 → 可选格式化"""
+    from core.workflow_engine import run_extract_and_fill
+    from db.database import DocumentDAO, TemplateDAO
+
+    if not req.template_id:
+        raise HTTPException(400, "template_id is required")
+    template = TemplateDAO.get_by_id(req.template_id)
+    if not template:
+        raise HTTPException(404, "模板不存在")
+
+    def get_texts(doc_id):
+        return DocumentDAO.get_by_id(doc_id)
+
+    try:
+        ctx = await run_extract_and_fill(
+            req.doc_ids, template.file_path, get_texts, req.format_instruction or None,
+        )
+        return {
+            "success": True,
+            "entity_count": ctx.get("entity_count", 0),
+            "fill_accuracy": ctx.get("fill_accuracy", 0),
+            "filled_path": ctx.get("filled_path"),
+            "logs": ctx.logs,
+        }
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
+
+
+@router.post("/workflow/full-pipeline", tags=["工作流"], summary="完整三模块串联流程")
+async def workflow_full_pipeline(req: WorkflowRequest):
+    """Module 2 → CrossDocFusion → Module 3 → Module 1: 完整的端到端流程"""
+    from core.workflow_engine import run_full_pipeline
+    from db.database import DocumentDAO, TemplateDAO
+
+    if not req.template_id:
+        raise HTTPException(400, "template_id is required")
+    template = TemplateDAO.get_by_id(req.template_id)
+    if not template:
+        raise HTTPException(404, "模板不存在")
+
+    def get_texts(doc_id):
+        return DocumentDAO.get_by_id(doc_id)
+
+    try:
+        ctx = await run_full_pipeline(
+            req.doc_ids, template.file_path, get_texts,
+            req.format_instruction, req.include_fusion,
+        )
+        cross = ctx.get("cross_doc", [])
+        return {
+            "success": True,
+            "entity_count": ctx.get("entity_count", 0),
+            "cross_document_entities": len(cross),
+            "fill_accuracy": ctx.get("fill_accuracy", 0),
+            "filled_path": ctx.get("filled_path"),
+            "logs": ctx.logs,
+        }
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
+
+
+@router.post("/workflow/batch-process", tags=["工作流"], summary="批量处理并生成融合报告")
+async def workflow_batch_process(req: WorkflowRequest):
+    """多文档批量提取 → 跨文档数据融合 → 生成汇总报告(Codex CLI)"""
+    from core.workflow_engine import run_batch_process_and_report
+    from db.database import DocumentDAO
+
+    def get_texts(doc_id):
+        return DocumentDAO.get_by_id(doc_id)
+
+    try:
+        ctx = await run_batch_process_and_report(
+            req.doc_ids, get_texts, req.report_description,
+        )
+        return {
+            "success": True,
+            "entity_count": ctx.get("entity_count", 0),
+            "cross_document_entities": len(ctx.get("cross_doc", [])),
+            "report_path": ctx.get("report_path"),
+            "logs": ctx.logs,
+        }
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 

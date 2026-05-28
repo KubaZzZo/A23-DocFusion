@@ -103,6 +103,34 @@ def test_format_docx_updates_heading_font_size(tmp_path):
     assert first_run.font.size.pt == 18
 
 
+def test_format_docx_updates_first_line_bold_underline_color(tmp_path):
+    from docx import Document
+
+    source = tmp_path / "source.docx"
+    output = tmp_path / "out.docx"
+    doc = Document()
+    doc.add_paragraph("First line")
+    doc.add_paragraph("Second line")
+    doc.save(source)
+
+    result = format_docx(
+        {
+            "input": str(source),
+            "output": str(output),
+            "first_line_bold": True,
+            "first_line_underline": True,
+            "first_line_color": "#d93025",
+        }
+    )
+
+    assert result["output"] == str(output)
+    formatted = Document(output)
+    run = formatted.paragraphs[0].runs[0]
+    assert run.font.bold is True
+    assert run.font.underline is True
+    assert str(run.font.color.rgb) == "D93025"
+
+
 def test_format_docx_updates_body_font_line_spacing_and_margins(tmp_path):
     source = tmp_path / "source.docx"
     output = tmp_path / "formatted.docx"

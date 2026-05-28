@@ -12,6 +12,15 @@ LOCAL_FIELD_RULES = {
     "id_number": ("编号", "证件号", "合同号", "统一社会信用代码", "身份证"),
 }
 
+FIELD_CONTEXT_HINTS = {
+    "甲方": 0,
+    "乙方": 1,
+    "丙方": 2,
+    "第一": 0,
+    "第二": 1,
+    "第三": 2,
+}
+
 MATCH_PROMPT = """你是一个语义匹配专家。请将模板表格的字段名与已提取的实体数据进行智能匹配。
 
 ## 模板字段
@@ -59,8 +68,8 @@ MATCH_PROMPT = """你是一个语义匹配专家。请将模板表格的字段�
 
 
 class SemanticMatcher:
-    def __init__(self, provider: str = None):
-        self.llm = get_llm(provider)
+    def __init__(self, provider: str = None, llm_client=None):
+        self.llm = llm_client or get_llm(provider)
 
     async def match(self, fields: list[str], entities: list[dict]) -> dict:
         """将字段列表与实体列表进行语义匹配"""
@@ -81,11 +90,12 @@ class SemanticMatcher:
     def _match_local(fields: list[str], entities: list[dict]) -> dict:
         matches = []
         unmatched_fields = []
-        entities_by_type = SemanticMatcher._best_entities_by_type(entities)
+        entities_by_type = SemanticMatcher._entities_by_type(entities)
 
         for field in fields:
             entity_type = SemanticMatcher._infer_entity_type(field)
-            entity = entities_by_type.get(entity_type)
+            candidates = entities_by_type.get(entity_type)
+            entity = SemanticMatcher._select_by_context(field, candidates) if candidates else None
             if entity:
                 matches.append(
                     {
@@ -101,18 +111,28 @@ class SemanticMatcher:
         return {"matches": matches, "unmatched_fields": unmatched_fields}
 
     @staticmethod
-    def _best_entities_by_type(entities: list[dict]) -> dict[str, dict]:
-        best = {}
+    def _entities_by_type(entities: list[dict]) -> dict[str, list[dict]]:
+        by_type: dict[str, list[dict]] = {}
         for entity in entities:
             entity_type = entity.get("type")
             if not entity_type or not entity.get("value"):
                 continue
-            current = best.get(entity_type)
-            confidence = entity.get("confidence") or 0
-            current_confidence = (current or {}).get("confidence") or 0
-            if current is None or confidence > current_confidence:
-                best[entity_type] = entity
-        return best
+            by_type.setdefault(entity_type, []).append(entity)
+        for group in by_type.values():
+            group.sort(key=lambda e: e.get("confidence") or 0, reverse=True)
+        return by_type
+
+    @staticmethod
+    def _select_by_context(field: str, candidates: list[dict]) -> dict | None:
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        for hint, index in FIELD_CONTEXT_HINTS.items():
+            if hint in field:
+                if index < len(candidates):
+                    return candidates[index]
+        return candidates[0]
 
     @staticmethod
     def _infer_entity_type(field: str) -> str | None:

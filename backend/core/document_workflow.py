@@ -25,6 +25,7 @@ class DocumentWorkflow:
                 "id": d.id,
                 "filename": d.filename,
                 "file_type": d.file_type,
+                "file_path": d.file_path,
                 "parsed": d.raw_text is not None,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
             }
@@ -82,12 +83,11 @@ class DocumentWorkflow:
             raise WorkflowNotFoundError("文档不存在")
 
         commander = DocCommander()
-        doc_info = f"文件名: {doc.filename}, 类型: {doc.file_type}"
-        parsed = await commander.parse_command(command, doc_info)
-        if "error" in parsed:
-            raise WorkflowValidationError(parsed["error"])
-        result = commander.execute(doc.file_path, parsed)
-        return {"command": parsed, "result": result}
+        doc_info = f"文件名: {doc.filename}, 类型: {doc.file_type}, 路径: {doc.file_path}"
+        result = await commander.execute_command(command, doc.file_path, doc_info)
+        if not result.get("success"):
+            raise WorkflowValidationError(result.get("message", "文档操作执行失败"))
+        return {"command": command, "result": result}
 
     def _next_upload_path(self, filename: str) -> Path:
         source = Path(filename)

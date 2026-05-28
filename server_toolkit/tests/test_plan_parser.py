@@ -45,6 +45,27 @@ def test_parse_instruction_builds_format_then_convert_l2_plan():
     assert plan["steps"][1]["args"]["input"] == "work/report_formatted.docx"
 
 
+def test_parse_instruction_builds_single_format_plan_for_first_line():
+    plan = parse_instruction("将第一行字体变粗,然后加下划线并改成红色", ["input/report.docx"])
+
+    assert plan["level"] == "L1"
+    assert plan["outputs"] == ["output/report_formatted.docx"]
+    assert plan["steps"][0]["command"] == "format-docx"
+    assert plan["steps"][0]["args"]["first_line_bold"] is True
+    assert plan["steps"][0]["args"]["first_line_underline"] is True
+    assert plan["steps"][0]["args"]["first_line_color"] == "#d93025"
+
+
+def test_parse_instruction_converts_markdown_before_first_line_format():
+    plan = parse_instruction("将第一行字体变粗,然后加下划线", ["input/notes.md"])
+
+    assert plan["level"] == "L2"
+    assert plan["outputs"] == ["output/notes_formatted.docx"]
+    assert [step["command"] for step in plan["steps"]] == ["convert", "format-docx"]
+    assert plan["steps"][1]["args"]["first_line_bold"] is True
+    assert plan["steps"][1]["args"]["first_line_underline"] is True
+
+
 def test_parse_instruction_builds_ocr_then_extract_l2_plan():
     plan = parse_instruction("ocr then extract amount date vendor", ["input/invoice.png"])
 

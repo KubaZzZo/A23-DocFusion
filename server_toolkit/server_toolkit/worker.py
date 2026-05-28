@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from server_toolkit.agent import run_codex_agent
 from server_toolkit.task_models import TaskPlan, validate_workspace_path
 from server_toolkit.tools import ToolError, run_tool
 
@@ -27,16 +28,20 @@ def execute_plan(task_file: str | Path, workspace: str | Path) -> ExecutionResul
 
     _log(logs_path, "start", level=plan.level, requires_agent=plan.requires_agent)
     try:
-        if plan.requires_agent:
-            raise ToolError("Codex agent execution is planned but not implemented in this toolkit slice")
-
         for index, step in enumerate(plan.steps, start=1):
             if step.tool != "docfusion":
                 raise ToolError(f"Unsupported tool: {step.tool}")
+
             _log(logs_path, "step_started", step=step.id, index=index, command=step.command)
-            args = _resolve_args(step.args, workspace_path)
-            result = run_tool(step.command, args)
-            _log(logs_path, "step_completed", step=step.id, index=index, command=step.command, result=result)
+
+            if step.command == "agent-generate":
+                result = _run_agent_step(step.args, workspace_path)
+            else:
+                args = _resolve_args(step.args, workspace_path)
+                result = run_tool(step.command, args)
+
+            _log(logs_path, "step_completed", step=step.id, index=index,
+                 command=step.command, result=result)
 
         _verify_declared_outputs(workspace_path, plan.outputs)
         files = _collect_outputs(workspace_path)
@@ -45,7 +50,24 @@ def execute_plan(task_file: str | Path, workspace: str | Path) -> ExecutionResul
     except Exception as exc:
         error = str(exc)
         _log(logs_path, "error", error=error)
-        return ExecutionResult(success=False, files=_collect_outputs(workspace_path), error=error)
+        return ExecutionResult(
+            success=False, files=_collect_outputs(workspace_path), error=error
+        )
+
+
+def _run_agent_step(args: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    """Execute an L3 agent step via Codex CLI."""
+    instruction = str(args.get("instruction", ""))
+    if not instruction:
+        raise ToolError("agent-generate requires 'instruction' in args")
+
+    result = run_codex_agent(str(workspace), instruction)
+    if not result.get("success"):
+        raise ToolError(result.get("message", "Agent execution failed"))
+    return {
+        "outputs": result.get("outputs", []),
+        "stdout": result.get("stdout", ""),
+    }
 
 
 def _ensure_workspace_dirs(workspace: Path) -> None:

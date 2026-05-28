@@ -1,0 +1,28 @@
+[
+  {
+    "input_file": "sample.txt",
+    "expected_entities": [
+      {"type": "organization", "value": "北京科技有限公司"},
+      {"type": "organization", "value": "上海创新企业"},
+      {"type": "date", "value": "2024年3月15日"},
+      {"type": "money", "value": "500000元"},
+      {"type": "person", "value": "张伟"},
+      {"type": "phone", "value": "13800138000"}
+    ],
+    "min_recall": 0.8,
+    "description": "Basic contract document with common entity types"
+  },
+  {
+    "input_file": "sample.md",
+    "expected_entities": [
+      {"type": "organization", "value": "深圳智能科技股份有限公司"},
+      {"type": "date", "value": "2023-06-20"},
+      {"type": "money", "value": "10000000元"},
+      {"type": "person", "value": "李明"},
+      {"type": "phone", "value": "0755-88889999"},
+      {"type": "email", "value": "contact@example.com"}
+    ],
+    "min_recall": 0.8,
+    "description": "Markdown format company information"
+  }
+]

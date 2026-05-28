@@ -4,6 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import public_router, router
 from db.models import init_db
+from settings_store import apply_saved_settings
+
+apply_saved_settings()
 
 app = FastAPI(
     title="DocFusion API",

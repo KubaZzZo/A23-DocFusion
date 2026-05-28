@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh *)",
+      "Read(//c/Users/liukun/.ssh/**)",
+      "Bash(pip install *)",
+      "Bash(pacman -S sshpass)",
+      "Bash(python *)",
+      "Bash(git add *)"
+    ]
+  }
+}

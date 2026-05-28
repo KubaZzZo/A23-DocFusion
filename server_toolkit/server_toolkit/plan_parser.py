@@ -22,6 +22,10 @@ def parse_instruction(instruction: str, inputs: list[str]) -> dict:
     if _is_merge_then_format(text, instruction):
         return _merge_then_format_plan(instruction, inputs)
 
+    if _is_generate_request(text, instruction):
+        return _generate_plan(instruction, inputs)
+    if _is_format_request(text, instruction):
+        return _format_plan(instruction, inputs)
     if _has_any(text, ["convert", "export"]) or _has_any(instruction, ["转成", "转换", "导出为", "杞垚", "杞崲"]):
         return _convert_plan(text, inputs)
     if _has_any(text, ["merge", "combine"]) or _has_any(instruction, ["合并", "拼接", "鍚堝苟"]):
@@ -30,6 +34,8 @@ def parse_instruction(instruction: str, inputs: list[str]) -> dict:
         return _extract_plan(instruction, inputs)
     if _has_any(text, ["analyze", "summarize table"]) or _has_any(instruction, ["分析", "统计", "汇总"]):
         return _single_step_plan("analyze", inputs[0], "output/analysis.json", {})
+    if _is_generate_request(text, instruction):
+        return _generate_plan(instruction, inputs)
     raise PlanUnresolvedError("PLAN_UNRESOLVED: instruction is not a supported L1/L2 task")
 
 
@@ -133,6 +139,39 @@ def _merge_then_format_plan(instruction: str, inputs: list[str]) -> dict:
     }
 
 
+def _format_plan(instruction: str, inputs: list[str]) -> dict:
+    source = inputs[0]
+    suffix = Path(source).suffix.lower()
+    output = f"output/{Path(source).stem}_formatted.docx"
+    format_args = _read_format_args(instruction)
+    if suffix == ".docx":
+        return _single_step_plan("format-docx", source, output, format_args)
+    if suffix in {".txt", ".md"}:
+        work_file = f"work/{Path(source).stem}.docx"
+        return {
+            "level": "L2",
+            "requires_agent": False,
+            "inputs": [source],
+            "outputs": [output],
+            "timeout_seconds": 180,
+            "steps": [
+                {
+                    "id": "step_1",
+                    "tool": "docfusion",
+                    "command": "convert",
+                    "args": {"input": source, "to": "docx", "output": work_file},
+                },
+                {
+                    "id": "step_2",
+                    "tool": "docfusion",
+                    "command": "format-docx",
+                    "args": {"input": work_file, "output": output, **format_args},
+                },
+            ],
+        }
+    raise PlanUnresolvedError("PLAN_UNRESOLVED: format task requires a docx, txt, or md input")
+
+
 def _extract_plan(instruction: str, inputs: list[str]) -> dict:
     schema = _read_schema(instruction)
     args = {"type": "text"}
@@ -154,7 +193,7 @@ def _single_step_plan(command: str, source: str, output: str, extra_args: dict) 
 
 
 def _is_format_then_convert(text: str, instruction: str) -> bool:
-    has_format = _has_any(text, ["format", "font"]) or _has_any(instruction, ["字体", "字号", "标题", "格式"])
+    has_format = _is_format_request(text, instruction)
     has_convert = _has_any(text, ["convert", "pdf"]) or _has_any(instruction, ["转成", "转换", "导出为"])
     return has_format and has_convert
 
@@ -167,8 +206,15 @@ def _is_ocr_then_extract(text: str, instruction: str) -> bool:
 
 def _is_merge_then_format(text: str, instruction: str) -> bool:
     has_merge = _has_any(text, ["merge", "combine"]) or _has_any(instruction, ["合并", "拼接"])
-    has_format = _has_any(text, ["format", "font"]) or _has_any(instruction, ["字体", "字号", "标题", "格式"])
+    has_format = _is_format_request(text, instruction)
     return has_merge and has_format
+
+
+def _is_format_request(text: str, instruction: str) -> bool:
+    return _has_any(text, ["format", "font", "bold", "underline", "color"]) or _has_any(
+        instruction,
+        ["字体", "字号", "标题", "格式", "加粗", "下划线", "颜色", "变粗", "第一行"],
+    )
 
 
 def _read_format_args(instruction: str) -> dict:
@@ -178,7 +224,37 @@ def _read_format_args(instruction: str) -> dict:
     size_match = re.search(r"\b(1[0-9]|2[0-9]|3[0-9])\b", instruction)
     if size_match:
         args["heading_size"] = int(size_match.group(1))
+    if "第一行" in instruction:
+        if "加粗" in instruction or "变粗" in instruction or "bold" in instruction.lower():
+            args["first_line_bold"] = True
+        if "下划线" in instruction or "underline" in instruction.lower():
+            args["first_line_underline"] = True
+        color = _read_color(instruction)
+        if color:
+            args["first_line_color"] = color
     return args
+
+
+def _read_color(instruction: str) -> str | None:
+    text = instruction.lower()
+    color_map = {
+        "红": "#d93025",
+        "red": "#d93025",
+        "蓝": "#1a73e8",
+        "blue": "#1a73e8",
+        "绿": "#188038",
+        "green": "#188038",
+        "黑": "#000000",
+        "black": "#000000",
+    }
+    for key, value in color_map.items():
+        if key in text or key in instruction:
+            return value
+    match = re.search(r"#?[0-9a-fA-F]{6}", instruction)
+    if match:
+        value = match.group(0)
+        return value if value.startswith("#") else f"#{value}"
+    return None
 
 
 def _read_schema(instruction: str) -> list[str]:
@@ -195,6 +271,48 @@ def _read_schema(instruction: str) -> list[str]:
     if "vendor" in text or "销售方" in instruction:
         schema.append("vendor")
     return schema
+
+
+def _is_generate_request(text: str, instruction: str) -> bool:
+    return _has_any(text, ["generate", "create", "write a", "produce"]) or _has_any(
+        instruction,
+        ["生成", "创建", "写一份", "做一份", "出一份", "帮我写", "撰写", "编写", "起草"],
+    )
+
+
+def _generate_plan(instruction: str, inputs: list[str]) -> dict:
+    """Build an L3 agent plan for document generation tasks."""
+    output_ext = _detect_output_format(instruction)
+    output = f"output/generated{output_ext}"
+    stem = Path(inputs[0]).stem if inputs else "generated"
+    output = f"output/{stem}{output_ext}"
+    return {
+        "level": "L3",
+        "requires_agent": True,
+        "inputs": inputs,
+        "outputs": [output],
+        "instruction": instruction,
+        "timeout_seconds": 600,
+        "steps": [
+            {
+                "id": "step_1",
+                "tool": "docfusion",
+                "command": "agent-generate",
+                "args": {"instruction": instruction, "inputs": inputs, "output": output},
+            }
+        ],
+    }
+
+
+def _detect_output_format(instruction: str) -> str:
+    text = instruction.lower()
+    if "pdf" in text:
+        return ".pdf"
+    if "excel" in text or "xlsx" in text or "表格" in instruction or "汇总表" in instruction:
+        return ".xlsx"
+    if "txt" in text or "纯文本" in instruction:
+        return ".txt"
+    return ".docx"
 
 
 def _has_any(text: str, needles: list[str]) -> bool:

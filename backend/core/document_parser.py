@@ -1,4 +1,5 @@
 """Document parser supporting docx/md/xlsx/txt/pdf/image formats."""
+import subprocess
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -23,7 +24,7 @@ class ParserAdapter:
 
 class DocumentParser:
     IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".bmp"}
-    SUPPORTED_TYPES = {".docx", ".md", ".xlsx", ".txt", ".pdf"} | IMAGE_TYPES
+    SUPPORTED_TYPES = {".docx", ".doc", ".md", ".xlsx", ".txt", ".pdf"} | IMAGE_TYPES
     _ADAPTERS: dict[str, ParserAdapter] = {}
 
     @staticmethod
@@ -96,6 +97,7 @@ class DocumentParser:
         cls.register_adapter(ParserAdapter({".txt"}, lambda path: cls._parse_txt(path)))
         cls.register_adapter(ParserAdapter({".md"}, lambda path: cls._parse_md(path)))
         cls.register_adapter(ParserAdapter({".docx"}, lambda path: cls._parse_docx(path)))
+        cls.register_adapter(ParserAdapter({".doc"}, lambda path: cls._parse_doc(path)))
         cls.register_adapter(ParserAdapter({".xlsx"}, lambda path: cls._parse_xlsx(path)))
         cls.register_adapter(ParserAdapter({".pdf"}, lambda path: cls._parse_pdf(path)))
         cls.register_adapter(ParserAdapter(cls.IMAGE_TYPES, lambda path: cls._parse_image(path)))
@@ -123,6 +125,42 @@ class DocumentParser:
                 if cells:
                     parts.append(" | ".join(cells))
         return "\n".join(parts)
+
+    @staticmethod
+    def _parse_doc(path: Path) -> str:
+        """Parse legacy .doc format using subprocess converters."""
+        try:
+            result = subprocess.run(
+                ["antiword", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        try:
+            result = subprocess.run(
+                ["libreoffice", "--headless", "--convert-to", "txt:Text", "--outdir", "/tmp", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode == 0:
+                txt_path = Path("/tmp") / f"{path.stem}.txt"
+                if txt_path.exists():
+                    content = txt_path.read_text(encoding="utf-8", errors="ignore")
+                    txt_path.unlink()
+                    return content.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        log.warning(".doc parsing requires antiword or libreoffice. Install: apt install antiword or libreoffice")
+        return "[.doc parsing requires antiword or libreoffice]"
 
     @staticmethod
     def _parse_xlsx(path: Path) -> str:

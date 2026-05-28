@@ -9,6 +9,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -102,8 +103,7 @@ class DocFusionApiClient:
         target = Path(destination)
         if target.is_dir():
             target = target / filename
-        target.write_bytes(payload)
-        return target
+        return self._write_payload_with_fallback(payload, target)
 
     def export_entities(
         self,
@@ -132,8 +132,34 @@ class DocFusionApiClient:
         target = Path(destination)
         if target.is_dir():
             target = target / filename
-        target.write_bytes(payload)
-        return target
+        return self._write_payload_with_fallback(payload, target)
+
+    def _write_payload_with_fallback(self, payload: bytes, target: Path) -> Path:
+        try:
+            target.write_bytes(payload)
+            return target
+        except PermissionError as exc:
+            fallback = self._fallback_output_path(target)
+            try:
+                fallback.write_bytes(payload)
+                return fallback
+            except PermissionError as fallback_exc:
+                raise ApiError(
+                    f"无法写入文件：{target}。请关闭正在打开的同名文件，或选择其他保存位置。"
+                ) from fallback_exc
+            except OSError as fallback_exc:
+                raise ApiError(f"无法写入文件：{fallback}。{fallback_exc}") from fallback_exc
+        except OSError as exc:
+            raise ApiError(f"无法写入文件：{target}。{exc}") from exc
+
+    @staticmethod
+    def _fallback_output_path(target: Path) -> Path:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suffix = target.suffix or ".bin"
+        fallback = target.with_name(f"{target.stem}_{stamp}{suffix}")
+        if fallback != target:
+            return fallback
+        return Path.home() / "Downloads" / f"docfusion_export_{stamp}{suffix}"
 
     def _request(
         self,

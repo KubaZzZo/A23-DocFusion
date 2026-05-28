@@ -153,6 +153,7 @@ class DocFusionWindow(QMainWindow):
 
         self.client = DocFusionApiClient()
         self.pool = QThreadPool.globalInstance()
+        self._active_runnables: set[ApiRunnable | ProgressApiRunnable] = set()
         self.nav_buttons: list[NavButton] = []
         self.documents: list[dict[str, Any]] = []
         self.entities: list[dict[str, Any]] = []
@@ -1288,7 +1289,7 @@ class DocFusionWindow(QMainWindow):
         runnable.signals.progress.connect(lambda event: self.log(event.get("message", str(event)) if isinstance(event, dict) else str(event)))
         runnable.signals.succeeded.connect(lambda data: self._after_mutation(data, "批量提取完成"))
         runnable.signals.failed.connect(lambda message: self._on_api_error("批量提取", message))
-        self.pool.start(runnable)
+        self._start_runnable(runnable)
 
     def parse_selected_document(self) -> None:
         doc_id = self._require_selected_doc()
@@ -1366,7 +1367,7 @@ class DocFusionWindow(QMainWindow):
         self._run_api(
             "导出实体",
             lambda: self.client.export_entities(path, fmt=fmt, doc_id=doc_id, keyword=keyword or None),
-            lambda target: self.log(f"实体已导出：{target}"),
+            lambda target, requested=Path(path): self._on_entities_exported(target, requested),
         )
 
     def upload_template(self) -> None:
@@ -1494,7 +1495,7 @@ class DocFusionWindow(QMainWindow):
         runnable.signals.progress.connect(self._on_crawl_progress)
         runnable.signals.succeeded.connect(self._on_crawl_finished)
         runnable.signals.failed.connect(lambda message: self._on_crawl_failed(message))
-        self.pool.start(runnable)
+        self._start_runnable(runnable)
 
     def store_selected_crawled_articles(self) -> None:
         articles = self._selected_crawled_articles()
@@ -1515,7 +1516,7 @@ class DocFusionWindow(QMainWindow):
         self._run_api(
             "生成测试文档",
             lambda: generate_crawled_documents(articles),
-            lambda data: self.log(f"测试文档已生成：{self._pretty(data)}"),
+            self._after_generate_crawled_documents,
         )
 
     def export_fusion_report(self) -> None:
@@ -1720,6 +1721,11 @@ class DocFusionWindow(QMainWindow):
         runnable = ApiRunnable(task)
         runnable.signals.succeeded.connect(on_success)
         runnable.signals.failed.connect(lambda message, action=label: self._on_api_error(action, message))
+        self._start_runnable(runnable)
+
+    def _start_runnable(self, runnable: ApiRunnable | ProgressApiRunnable) -> None:
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(lambda worker=runnable: self._active_runnables.discard(worker))
         self.pool.start(runnable)
 
     def _on_health(self, data: dict[str, Any]) -> None:
@@ -1737,7 +1743,7 @@ class DocFusionWindow(QMainWindow):
         self.metric_entities.set_data(data.get("entities", 0), "已抽取结构化实体")
         self.metric_templates.set_data(data.get("templates", 0), "可用于自动填充")
         self.metric_articles.set_data(data.get("articles", 0), "爬取文章记录")
-        self.api_preview.setPlainText(self._pretty(data))
+        self.api_preview.setPlainText(self._format_statistics_preview(data))
 
     def _on_documents(self, docs: list[dict[str, Any]]) -> None:
         self.documents = docs
@@ -1888,8 +1894,22 @@ class DocFusionWindow(QMainWindow):
         return [self.crawled_preview[row] for row in selected_rows if 0 <= row < len(self.crawled_preview)]
 
     def _after_store_crawled(self, data: Any) -> None:
+        saved = int(data.get("saved", 0)) if isinstance(data, dict) else 0
+        total = int(data.get("articles", 0)) if isinstance(data, dict) else 0
+        self.crawl_status.setText(f"入库完成：成功保存 {saved}/{total} 篇文章。")
+        self.store_crawl_button.setEnabled(False)
+        self.generate_docs_button.setEnabled(bool(self.crawled_preview))
         self.log(f"爬取文章已入库：{self._pretty(data)}")
         self.load_articles()
+        self.load_statistics()
+
+    def _after_generate_crawled_documents(self, data: Any) -> None:
+        count = 0
+        if isinstance(data, dict):
+            count = int(data.get("generated", 0) or len(data.get("docx", []) or []))
+        self.crawl_status.setText(f"测试文档生成完成：生成 {count} 个文档。")
+        self.log(f"测试文档已生成：{self._pretty(data)}")
+        self.load_documents()
         self.load_statistics()
 
     def _render_recent_documents(self) -> None:
@@ -2027,6 +2047,12 @@ class DocFusionWindow(QMainWindow):
         self.log(f"文档已下载：{path}")
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
+    def _on_entities_exported(self, path: Path, requested: Path) -> None:
+        if Path(path) != requested:
+            self.log(f"实体已导出到备用文件：{path}（原路径可能被占用：{requested}）")
+            return
+        self.log(f"实体已导出：{path}")
+
     def _server_task_client(self) -> ServerTaskClient:
         return ServerTaskClient(
             self.server_task_url_input.text().strip(),
@@ -2151,3 +2177,27 @@ class DocFusionWindow(QMainWindow):
         import json
 
         return json.dumps(data, ensure_ascii=False, indent=2)
+
+    def _format_statistics_preview(self, data: dict[str, Any]) -> str:
+        type_labels = {
+            "address": "地址",
+            "amount": "金额",
+            "custom": "自定义",
+            "date": "日期",
+            "person": "人员",
+            "organization": "机构",
+        }
+        lines = [
+            "后端统计",
+            f"文档数量：{data.get('documents', 0)}",
+            f"实体数量：{data.get('entities', 0)}",
+            f"模板数量：{data.get('templates', 0)}",
+            f"文章数量：{data.get('articles', 0)}",
+        ]
+        entity_types = data.get("entity_types") or {}
+        if entity_types:
+            lines.append("")
+            lines.append("实体类型分布：")
+            for key, value in entity_types.items():
+                lines.append(f"  {type_labels.get(str(key), str(key))}：{value}")
+        return "\n".join(lines)

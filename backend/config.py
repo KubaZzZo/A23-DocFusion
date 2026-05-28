@@ -67,9 +67,19 @@ LLM_CONFIG = {
 CHUNK_SIZE = 3000  # 每块最大字符数
 CHUNK_OVERLAP = 200  # 重叠字符数
 
+# LLM 调用成本控制
+LLM_BUDGET = {
+    "max_tokens_per_request": 4000,  # 单次请求最大 token 数
+    "max_requests_per_minute": 60,  # 每分钟最大请求数
+    "timeout_seconds": 30,  # 请求超时时间
+    "enable_fallback": True,  # 启用降级策略
+    "fallback_on_timeout": True,  # 超时时降级
+    "fallback_on_error": True,  # 错误时降级
+}
+
 # API服务
-API_HOST = "127.0.0.1"
-API_PORT = 8000
+API_HOST = os.getenv("DOCFUSION_API_HOST", "127.0.0.1")
+API_PORT = int(os.getenv("DOCFUSION_API_PORT", "8000"))
 MAX_UPLOAD_SIZE = int(os.getenv("DOCFUSION_MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))
 
 # 爬虫配置
