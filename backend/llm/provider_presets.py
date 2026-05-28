@@ -29,6 +29,7 @@ class ProviderProfile:
 
 _PRESETS = [
     ProviderPreset("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", "sk-..."),
+    ProviderPreset("maolaoapi", "Maolao API", "https://maolaoapi.com/v1", "gpt-4o-mini", "sk-..."),
     ProviderPreset("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "sk-..."),
     ProviderPreset("moonshot", "Moonshot", "https://api.moonshot.cn/v1", "moonshot-v1-8k", "sk-..."),
     ProviderPreset("qwen", "通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "sk-..."),

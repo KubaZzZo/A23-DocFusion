@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QThreadPool, QTimer, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -176,6 +176,10 @@ class DocFusionWindow(QMainWindow):
         self.server_task_config = load_server_task_config(self.server_task_config_path, self.server_task_defaults_path)
         self.api_process: subprocess.Popen | None = None
         self.source_checks: dict[str, QCheckBox] = {}
+        self.document_page = 1
+        self.document_page_size = 50
+        self._busy_actions: set[str] = set()
+        self.action_buttons: list[QPushButton] = []
 
         self._build()
         QTimer.singleShot(200, self.check_health)
@@ -196,7 +200,39 @@ class DocFusionWindow(QMainWindow):
         self.stack.addWidget(self._articles_page())
         self.stack.addWidget(self._settings_page())
         root.addWidget(self.stack, 1)
+        self._build_toast(shell)
+        self._register_shortcuts()
         self._activate_nav(0)
+
+    def _build_toast(self, parent: QWidget) -> None:
+        self.toast_label = QLabel(parent)
+        self.toast_label.setObjectName("toast")
+        self.toast_label.setAlignment(Qt.AlignCenter)
+        self.toast_label.setWordWrap(True)
+        self.toast_label.setFixedWidth(360)
+        self.toast_label.hide()
+
+    def _position_toast(self) -> None:
+        if not hasattr(self, "toast_label"):
+            return
+        margin = 24
+        x = max(margin, self.centralWidget().width() - self.toast_label.width() - margin)
+        self.toast_label.move(x, margin)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_toast()
+
+    def _register_shortcuts(self) -> None:
+        self.shortcuts: list[QShortcut] = []
+        for index in range(5):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{index + 1}"), self)
+            shortcut.activated.connect(lambda i=index: self._activate_nav(i))
+            self.shortcuts.append(shortcut)
+        for key, callback in [("Ctrl+U", self.upload_document), ("Ctrl+R", self.refresh_all)]:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(callback)
+            self.shortcuts.append(shortcut)
 
     def _sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -380,13 +416,15 @@ class DocFusionWindow(QMainWindow):
         layout.setContentsMargins(22, 20, 22, 22)
         layout.setSpacing(16)
         layout.addWidget(self._panel_heading("接口工作流", ""))
+        self.pipeline_bars: dict[str, QProgressBar] = {}
+        self.pipeline_labels: dict[str, QLabel] = {}
         steps = [
-            ("01", "上传文档", "导入资料", 100, TEAL),
-            ("02", "解析文档", "读取正文与结构", 75, PRIMARY),
-            ("03", "抽取实体", "识别人名、机构和关键字段", 55, AMBER),
-            ("04", "模板填充", "生成结构化结果", 35, BLUE),
+            ("upload", "01", "上传文档", "导入资料", TEAL),
+            ("parse", "02", "解析文档", "读取正文与结构", PRIMARY),
+            ("extract", "03", "抽取实体", "识别人名、机构和关键字段", AMBER),
+            ("template", "04", "模板填充", "生成结构化结果", BLUE),
         ]
-        for code, name, desc, progress, color in steps:
+        for key, code, name, desc, color in steps:
             row = QFrame()
             row.setObjectName("softPanel")
             row_layout = QHBoxLayout(row)
@@ -409,8 +447,10 @@ class DocFusionWindow(QMainWindow):
             row_layout.addLayout(text, 1)
             bar = QProgressBar()
             bar.setFixedWidth(150)
-            bar.setValue(progress)
+            bar.setValue(0)
             row_layout.addWidget(bar)
+            self.pipeline_bars[key] = bar
+            self.pipeline_labels[key] = sub
             layout.addWidget(row)
         return panel
 
@@ -464,21 +504,21 @@ class DocFusionWindow(QMainWindow):
         layout.addWidget(self._header("文档库", ""))
 
         tools = QHBoxLayout()
-        upload = QPushButton("上传文档")
-        upload.clicked.connect(self.upload_document)
-        tools.addWidget(upload)
-        refresh = QPushButton("刷新")
-        refresh.setObjectName("secondary")
-        refresh.clicked.connect(self.load_documents)
-        tools.addWidget(refresh)
-        batch = QPushButton("批量提取")
-        batch.setObjectName("secondary")
-        batch.clicked.connect(self.batch_extract_documents)
-        tools.addWidget(batch)
-        batch_closed_loop = QPushButton("批量处理导出")
-        batch_closed_loop.setObjectName("secondary")
-        batch_closed_loop.clicked.connect(self.batch_process_documents)
-        tools.addWidget(batch_closed_loop)
+        self.upload_button = QPushButton("上传文档")
+        self.upload_button.clicked.connect(self.upload_document)
+        tools.addWidget(self.upload_button)
+        self.refresh_documents_button = QPushButton("刷新")
+        self.refresh_documents_button.setObjectName("secondary")
+        self.refresh_documents_button.clicked.connect(self.load_documents)
+        tools.addWidget(self.refresh_documents_button)
+        self.batch_extract_button = QPushButton("批量提取")
+        self.batch_extract_button.setObjectName("secondary")
+        self.batch_extract_button.clicked.connect(self.batch_extract_documents)
+        tools.addWidget(self.batch_extract_button)
+        self.batch_process_button = QPushButton("批量处理导出")
+        self.batch_process_button.setObjectName("secondary")
+        self.batch_process_button.clicked.connect(self.batch_process_documents)
+        tools.addWidget(self.batch_process_button)
         demo = QPushButton("加载演示数据")
         demo.setObjectName("secondary")
         demo.clicked.connect(self.load_demo_data)
@@ -498,6 +538,23 @@ class DocFusionWindow(QMainWindow):
         delete = QPushButton("删除")
         delete.clicked.connect(self.delete_selected_document)
         tools.addWidget(delete)
+        self.action_buttons.extend(
+            [
+                self.upload_button,
+                self.refresh_documents_button,
+                self.batch_extract_button,
+                self.batch_process_button,
+                demo,
+                full_report,
+                parse,
+                extract,
+                delete,
+            ]
+        )
+        self.loading_indicator = QLabel("")
+        self.loading_indicator.setObjectName("muted")
+        self.loading_indicator.hide()
+        tools.addWidget(self.loading_indicator)
         tools.addStretch()
         layout.addLayout(tools)
 
@@ -538,6 +595,21 @@ class DocFusionWindow(QMainWindow):
         self.documents_table.setMinimumHeight(360)
         self.documents_table.itemSelectionChanged.connect(self._on_document_selected)
         table_layout.addWidget(self.documents_table)
+
+        pagination = QHBoxLayout()
+        self.documents_prev_button = QPushButton("上一页")
+        self.documents_prev_button.setObjectName("secondary")
+        self.documents_prev_button.clicked.connect(self.previous_documents_page)
+        pagination.addWidget(self.documents_prev_button)
+        self.documents_page_label = QLabel("第 1 页")
+        self.documents_page_label.setObjectName("muted")
+        pagination.addWidget(self.documents_page_label)
+        self.documents_next_button = QPushButton("下一页")
+        self.documents_next_button.setObjectName("secondary")
+        self.documents_next_button.clicked.connect(self.next_documents_page)
+        pagination.addWidget(self.documents_next_button)
+        pagination.addStretch()
+        table_layout.addLayout(pagination)
 
         detail_panel = QFrame()
         detail_panel.setObjectName("paperPanel")
@@ -1291,7 +1363,11 @@ class DocFusionWindow(QMainWindow):
 
     def load_documents(self) -> None:
         keyword = self.document_keyword.text().strip() if hasattr(self, "document_keyword") else ""
-        self._run_api("加载文档", lambda: self.client.documents(q=keyword or None), self._on_documents)
+        self._run_api(
+            "加载文档",
+            lambda: self.client.documents(page=self.document_page, limit=self.document_page_size, q=keyword or None),
+            self._on_documents,
+        )
 
     def load_entities(self) -> None:
         keyword = self.entity_keyword.text().strip() if hasattr(self, "entity_keyword") else ""
@@ -1312,6 +1388,15 @@ class DocFusionWindow(QMainWindow):
     def clear_document_search(self) -> None:
         if hasattr(self, "document_keyword"):
             self.document_keyword.clear()
+        self.document_page = 1
+        self.load_documents()
+
+    def next_documents_page(self) -> None:
+        self.document_page += 1
+        self.load_documents()
+
+    def previous_documents_page(self) -> None:
+        self.document_page = max(1, self.document_page - 1)
         self.load_documents()
 
     def clear_entity_filters(self) -> None:
@@ -1910,6 +1995,7 @@ class DocFusionWindow(QMainWindow):
 
     def _run_api(self, label: str, task: Callable[[], object], on_success: Callable[[Any], None]) -> None:
         self.log(f"{label}...")
+        self._begin_action(label)
         runnable = ApiRunnable(task)
         runnable.signals.succeeded.connect(lambda data, action=label, callback=on_success: self._safe_api_success(action, callback, data))
         runnable.signals.failed.connect(lambda message, action=label: self._on_api_error(action, message))
@@ -1917,14 +2003,55 @@ class DocFusionWindow(QMainWindow):
 
     def _start_runnable(self, runnable: ApiRunnable | ProgressApiRunnable) -> None:
         self._active_runnables.add(runnable)
-        runnable.signals.finished.connect(lambda r=runnable: self._active_runnables.discard(r))
+        runnable.signals.finished.connect(lambda r=runnable: self._finish_runnable(r))
         self.pool.start(runnable)
+
+    def _finish_runnable(self, runnable: ApiRunnable | ProgressApiRunnable) -> None:
+        self._active_runnables.discard(runnable)
 
     def _safe_api_success(self, action: str, callback: Callable[[Any], None], data: Any) -> None:
         try:
             callback(data)
+            self.show_toast(f"{action}完成", success=True)
         except Exception as exc:
             self._on_api_error(action, f"前端处理结果失败：{exc}")
+        finally:
+            self._finish_action(action)
+
+    def _begin_action(self, action: str) -> None:
+        self._busy_actions.add(action)
+        if hasattr(self, "loading_indicator"):
+            self.loading_indicator.setText(f"{action}...")
+            self.loading_indicator.show()
+        for button in getattr(self, "action_buttons", []):
+            button.setEnabled(False)
+
+    def _finish_action(self, action: str) -> None:
+        self._busy_actions.discard(action)
+        is_busy = bool(self._busy_actions)
+        if hasattr(self, "loading_indicator"):
+            self.loading_indicator.setVisible(is_busy)
+            if not is_busy:
+                self.loading_indicator.clear()
+        for button in getattr(self, "action_buttons", []):
+            button.setEnabled(not is_busy)
+
+    def show_toast(self, message: str, success: bool = True) -> None:
+        if not hasattr(self, "toast_label"):
+            return
+        fg = TEAL if success else RED
+        bg = TEAL_SOFT if success else "#FDECEC"
+        self.toast_label.setText(message)
+        self.toast_label.setStyleSheet(
+            f"background: {bg}; color: {fg}; border: 1px solid {fg}; "
+            "border-radius: 8px; padding: 10px 14px; font-weight: 650;"
+        )
+        self.toast_label.adjustSize()
+        self.toast_label.setFixedWidth(max(280, min(420, self.toast_label.width() + 24)))
+        self._position_toast()
+        self.toast_label.show()
+        self.toast_label.raise_()
+        QTimer.singleShot(3000, self.toast_label.hide)
 
     def _on_health(self, data: dict[str, Any]) -> None:
         self.api_status_tag.setText("后端已连接")
@@ -1941,7 +2068,27 @@ class DocFusionWindow(QMainWindow):
         self.metric_entities.set_data(data.get("entities", 0), "已抽取结构化实体")
         self.metric_templates.set_data(data.get("templates", 0), "可用于自动填充")
         self.metric_articles.set_data(data.get("articles", 0), "爬取文章记录")
+        self._update_pipeline_progress(data)
         self.api_preview.setPlainText(self._pretty(data))
+
+    def _update_pipeline_progress(self, data: dict[str, Any]) -> None:
+        documents = int(data.get("documents") or 0)
+        parsed = int(data.get("parsed_documents") or 0)
+        entities = int(data.get("entities") or 0)
+        templates = int(data.get("templates") or 0)
+        upload_progress = 100 if documents else 0
+        parse_progress = min(100, round(parsed * 100 / documents)) if documents else 0
+        extract_progress = 100 if parsed and entities else 0
+        template_progress = 100 if templates else 0
+        values = {
+            "upload": upload_progress,
+            "parse": parse_progress,
+            "extract": extract_progress,
+            "template": template_progress,
+        }
+        for key, value in values.items():
+            if key in getattr(self, "pipeline_bars", {}):
+                self.pipeline_bars[key].setValue(value)
 
     def _on_documents(self, docs: list[dict[str, Any]]) -> None:
         self.documents = docs
@@ -1961,6 +2108,12 @@ class DocFusionWindow(QMainWindow):
                 item.setForeground(QColor(INK if col == 1 else BODY))
                 self.documents_table.setItem(row, col, item)
         self.documents_table.resizeColumnsToContents()
+        if hasattr(self, "documents_page_label"):
+            self.documents_page_label.setText(f"第 {self.document_page} 页，本页 {len(docs)} 条")
+        if hasattr(self, "documents_prev_button"):
+            self.documents_prev_button.setEnabled(self.document_page > 1)
+        if hasattr(self, "documents_next_button"):
+            self.documents_next_button.setEnabled(len(docs) >= self.document_page_size)
         self._render_recent_documents()
 
     def _on_document_versions(self, versions: list[dict[str, Any]]) -> None:
@@ -2350,6 +2503,9 @@ class DocFusionWindow(QMainWindow):
         if hasattr(self, "settings_status_text"):
             self.settings_status_text.setText(f"{action}失败：{message}")
         self.log(f"{action}失败：{message}")
+
+        self.show_toast(f"{action} failed: {message}", success=False)
+        self._finish_action(action)
 
     def _on_document_selected(self) -> None:
         row = self.documents_table.currentRow()
