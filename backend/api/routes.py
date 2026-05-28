@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 from urllib.parse import quote
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from api.auth import require_local_bearer_token
@@ -13,6 +13,7 @@ from config import MAX_UPLOAD_SIZE, OUTPUT_DIR, UPLOAD_DIR
 from core.article_workflow import ArticleWorkflow
 from core.batch_workflow import BatchWorkflow
 from core.doc_commander import BACKUP_DIR
+from core.demo_workflow import DemoWorkflow, ReportWorkflow
 from core.document_workflow import DocumentWorkflow
 from core.entity_workflow import EntityWorkflow
 from core.statistics_workflow import StatisticsWorkflow
@@ -55,6 +56,16 @@ class CommandRequest(BaseModel):
 class FillRequest(BaseModel):
     template_id: int
     document_ids: list[int] = Field(default_factory=list)
+
+
+class FillReviewRequest(BaseModel):
+    template_id: int
+    document_ids: list[int] = Field(default_factory=list)
+
+
+class ConfirmedFillRequest(BaseModel):
+    template_id: int
+    fill_map: dict[str, str] = Field(default_factory=dict)
 
 
 class PageParams(BaseModel):
@@ -160,6 +171,10 @@ async def delete_document(doc_id: int, workflows: ApiWorkflows = Depends(get_wor
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
 
+@router.get("/entities/graph", tags=["实体提取"], summary="实体关系图谱")
+async def entity_graph(workflows: ApiWorkflows = Depends(get_workflows)):
+    return workflows.entity.relationship_graph()
+
 
 @router.get("/documents/{doc_id}/download", tags=["文档管理"], summary="下载文档")
 async def download_document(doc_id: int):
@@ -188,6 +203,13 @@ async def download_document_version(doc_id: int, version_id: int, workflows: Api
         raise HTTPException(404, "Version not found")
     filename = f"document-{doc_id}-v{version['version_no']}{Path(version['file_path']).suffix}"
     return _download_response(version["file_path"], BACKUP_DIR, filename)
+
+@router.get("/documents/{doc_id}/versions/{version_id}/diff", tags=["文档版本"], summary="文档版本差异")
+async def diff_document_version(doc_id: int, version_id: int, workflows: ApiWorkflows = Depends(get_workflows)):
+    try:
+        return workflows.document.version_diff(doc_id, version_id)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
 
 
 @router.post("/documents/{doc_id}/versions/{version_id}/rollback", tags=["文档版本"], summary="回滚文档版本")
@@ -378,6 +400,26 @@ async def fill_template(
     return {"task_id": task["task_id"], "status": task["status"]}
 
 
+
+@router.post("/templates/fill/review", tags=["模板填写"], summary="模板填写人工审核")
+async def review_template_fill(req: FillReviewRequest, workflows: ApiWorkflows = Depends(get_workflows)):
+    try:
+        return workflows.template.review_fill(req.template_id, req.document_ids)
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
+
+@router.post("/templates/fill/confirmed", tags=["模板填写"], summary="确认后填写模板")
+async def confirmed_template_fill(req: ConfirmedFillRequest, workflows: ApiWorkflows = Depends(get_workflows)):
+    try:
+        result = await workflows.template.fill_confirmed(req.template_id, req.fill_map)
+        public = _without_server_paths(result)
+        output_path = result.get("output_path")
+        if output_path:
+            public["result_download_url"] = f"/api/outputs/{Path(output_path).name}/download"
+        return public
+    except (WorkflowNotFoundError, WorkflowValidationError) as e:
+        _raise_http_error(e)
+
 @router.get("/templates/fill/{task_id}", tags=["模板填写"], summary="查询填写任务状态")
 async def get_fill_status(task_id: int):
     """查询模板填写任务的执行状态和结果"""
@@ -399,6 +441,14 @@ async def download_fill_result(task_id: int):
     return FileResponse(path, filename=_safe_download_filename(path.name))
 
 
+@router.get("/outputs/{filename}/download", tags=["模板填写"], summary="下载输出文件")
+async def download_output_file(filename: str):
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(400, "Invalid filename")
+    return _download_response(OUTPUT_DIR / safe_name, OUTPUT_DIR, safe_name)
+
+
 @public_router.get("/health", tags=["系统"], summary="健康检查")
 async def health():
     """检查API服务运行状态"""
@@ -406,6 +456,20 @@ async def health():
 
 
 # --- 爬取文章 ---
+
+
+@router.post("/demo/load", tags=["演示"], summary="加载演示数据")
+async def load_demo_data():
+    return DemoWorkflow(UPLOAD_DIR).load_demo_data()
+
+@router.get("/reports/full", tags=["演示"], summary="导出全流程报告")
+async def full_report():
+    content = ReportWorkflow().build_full_report()
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=_attachment_headers("docfusion_full_report.docx"),
+    )
 
 @router.get("/articles", tags=["新闻爬虫"], summary="获取爬取文章列表")
 async def list_articles(pagination: PageParams = Depends(), workflows: ApiWorkflows = Depends(get_workflows)):

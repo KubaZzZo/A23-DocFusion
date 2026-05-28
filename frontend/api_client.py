@@ -111,6 +111,32 @@ class DocFusionApiClient:
     def fill_status(self, task_id: int) -> dict[str, Any]:
         return self._request("GET", f"/templates/fill/{task_id}")
 
+    def review_template_fill(self, template_id: int, document_ids: list[int] | None = None) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/templates/fill/review",
+            data={"template_id": template_id, "document_ids": document_ids or []},
+        )
+
+    def confirmed_template_fill(self, template_id: int, fill_map: dict[str, str]) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/templates/fill/confirmed",
+            data={"template_id": template_id, "fill_map": fill_map},
+        )
+
+    def entity_graph(self) -> dict[str, Any]:
+        return self._request("GET", "/entities/graph")
+
+    def load_demo_data(self) -> dict[str, Any]:
+        return self._request("POST", "/demo/load")
+
+    def document_version_diff(self, doc_id: int, version_id: int) -> dict[str, Any]:
+        return self._request("GET", f"/documents/{doc_id}/versions/{version_id}/diff")
+
+    def download_full_report(self, destination: str | Path) -> Path:
+        return self._download_path("/reports/full", destination, default_filename="docfusion_full_report.docx")
+
     def articles(self, page: int = 1, limit: int = 50) -> list[dict[str, Any]]:
         return self._request("GET", "/articles", params={"page": page, "limit": limit})
 

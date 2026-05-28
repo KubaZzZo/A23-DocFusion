@@ -1,6 +1,7 @@
 """Document workflow orchestration shared by API and UI callers."""
 from pathlib import Path
 import shutil
+import difflib
 
 from core.document_parser import DocumentParser
 from core.doc_commander import DocCommander
@@ -122,6 +123,27 @@ class DocumentWorkflow:
         shutil.copyfile(source, doc.file_path)
         self.parse_document(doc_id)
         return {"success": True, "doc_id": doc_id, "version_id": version_id, "message": "版本已回滚"}
+
+    @staticmethod
+    def version_diff(doc_id: int, version_id: int) -> dict:
+        doc = DocumentDAO.get_by_id(doc_id)
+        if not doc:
+            raise WorkflowNotFoundError("文档不存在")
+        version = DocumentVersionDAO.get_by_id(version_id)
+        if not version or version.document_id != doc_id:
+            raise WorkflowNotFoundError("版本不存在")
+        before = DocumentParser.parse(version.file_path)["text"]
+        after = DocumentParser.parse(doc.file_path)["text"]
+        diff = "\n".join(
+            difflib.unified_diff(
+                before.splitlines(),
+                after.splitlines(),
+                fromfile=f"v{version.version_no}",
+                tofile="current",
+                lineterm="",
+            )
+        )
+        return {"doc_id": doc_id, "version_id": version_id, "before": before, "after": after, "diff": diff}
 
     @staticmethod
     def _serialize_version(version) -> dict:

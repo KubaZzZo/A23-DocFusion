@@ -7,7 +7,7 @@ import re
 
 from core.spreadsheet_safety import escape_formula_value
 from core.workflow_errors import WorkflowValidationError
-from db.database import EntityDAO
+from db.database import DocumentDAO, EntityDAO
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,41 @@ class EntityWorkflow:
             )
 
         raise WorkflowValidationError("不支持的导出格式，请使用 csv 或 xlsx")
+
+    def relationship_graph(self, limit: int = 300) -> dict:
+        documents = DocumentDAO.get_all()
+        document_by_id = {doc.id: doc for doc in documents}
+        entities = EntityDAO.get_all(limit=limit)
+        nodes = []
+        edges = []
+        seen_entities = set()
+
+        for doc in documents:
+            nodes.append({"id": f"doc:{doc.id}", "kind": "document", "label": doc.filename})
+
+        for entity in entities:
+            entity_key = f"entity:{entity.entity_type}:{entity.entity_value}"
+            if entity_key not in seen_entities:
+                nodes.append(
+                    {
+                        "id": entity_key,
+                        "kind": "entity",
+                        "type": entity.entity_type,
+                        "label": entity.entity_value,
+                    }
+                )
+                seen_entities.add(entity_key)
+            if entity.document_id in document_by_id:
+                edges.append(
+                    {
+                        "source": f"doc:{entity.document_id}",
+                        "target": entity_key,
+                        "label": entity.entity_type,
+                        "confidence": entity.confidence,
+                    }
+                )
+
+        return {"nodes": nodes, "edges": edges}
 
     @staticmethod
     def _query_entities(

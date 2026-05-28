@@ -162,6 +162,7 @@ class DocFusionWindow(QMainWindow):
         self.articles: list[dict[str, Any]] = []
         self.crawled_preview: list[dict[str, Any]] = []
         self.fusion_rows: list[dict[str, Any]] = []
+        self.template_review_suggestions: list[dict[str, Any]] = []
         self.selected_doc_id: int | None = None
         self.selected_article_id: int | None = None
         self.latest_template_id: int | None = None
@@ -478,6 +479,14 @@ class DocFusionWindow(QMainWindow):
         batch_closed_loop.setObjectName("secondary")
         batch_closed_loop.clicked.connect(self.batch_process_documents)
         tools.addWidget(batch_closed_loop)
+        demo = QPushButton("加载演示数据")
+        demo.setObjectName("secondary")
+        demo.clicked.connect(self.load_demo_data)
+        tools.addWidget(demo)
+        full_report = QPushButton("导出全流程报告")
+        full_report.setObjectName("secondary")
+        full_report.clicked.connect(self.export_full_report)
+        tools.addWidget(full_report)
         parse = QPushButton("解析")
         parse.setObjectName("secondary")
         parse.clicked.connect(self.parse_selected_document)
@@ -608,9 +617,19 @@ class DocFusionWindow(QMainWindow):
         rollback_version.setObjectName("secondary")
         rollback_version.clicked.connect(self.rollback_selected_version)
         version_actions.addWidget(rollback_version)
+        diff_version = QPushButton("对比变化")
+        diff_version.setObjectName("secondary")
+        diff_version.clicked.connect(self.show_selected_version_diff)
+        version_actions.addWidget(diff_version)
         version_actions.addStretch()
         version_layout.addLayout(version_actions)
         detail_layout.addWidget(version_panel)
+
+        self.version_diff_view = QPlainTextEdit()
+        self.version_diff_view.setReadOnly(True)
+        self.version_diff_view.setMaximumHeight(150)
+        self.version_diff_view.setPlaceholderText("自然语言修改后的 before/after diff 会显示在这里")
+        detail_layout.addWidget(self.version_diff_view)
 
         detail_layout.addWidget(build_server_task_panel(self))
         detail_layout.addStretch()
@@ -652,6 +671,10 @@ class DocFusionWindow(QMainWindow):
         refresh_fusion.setObjectName("secondary")
         refresh_fusion.clicked.connect(self.load_cross_document_entities)
         fusion_header.addWidget(refresh_fusion)
+        graph = QPushButton("关系图谱")
+        graph.setObjectName("secondary")
+        graph.clicked.connect(self.load_entity_graph)
+        fusion_header.addWidget(graph)
         export_fusion = QPushButton("导出融合报告")
         export_fusion.clicked.connect(self.export_fusion_report)
         fusion_header.addWidget(export_fusion)
@@ -667,6 +690,12 @@ class DocFusionWindow(QMainWindow):
         self.fusion_table.horizontalHeader().setStretchLastSection(True)
         self.fusion_table.setMinimumHeight(260)
         fusion_layout.addWidget(self.fusion_table)
+
+        self.entity_graph_view = QPlainTextEdit()
+        self.entity_graph_view.setReadOnly(True)
+        self.entity_graph_view.setMaximumHeight(180)
+        self.entity_graph_view.setPlaceholderText("实体关系图谱 JSON 会显示在这里")
+        fusion_layout.addWidget(self.entity_graph_view)
         layout.addWidget(fusion_panel)
         return page
 
@@ -755,12 +784,26 @@ class DocFusionWindow(QMainWindow):
         status = QPushButton("查询填充任务")
         status.setObjectName("secondary")
         status.clicked.connect(self.check_fill_status)
+        review = QPushButton("审核匹配")
+        review.setObjectName("secondary")
+        review.clicked.connect(self.review_template_fill)
+        layout.addWidget(review)
+        confirm = QPushButton("确认智能填写")
+        confirm.setObjectName("secondary")
+        confirm.clicked.connect(self.confirm_reviewed_fill)
+        layout.addWidget(confirm)
         layout.addWidget(status)
 
         self.template_status = QLabel("尚未上传模板")
         self.template_status.setObjectName("muted")
         self.template_status.setWordWrap(True)
         layout.addWidget(self.template_status)
+        self.template_review_table = QTableWidget(0, 4)
+        self.template_review_table.setHorizontalHeaderLabels(["字段", "建议值", "实体类型", "置信度"])
+        self.template_review_table.verticalHeader().setVisible(False)
+        self.template_review_table.horizontalHeader().setStretchLastSection(True)
+        self.template_review_table.setMinimumHeight(160)
+        layout.addWidget(self.template_review_table)
         layout.addStretch()
         return panel
 
@@ -1288,6 +1331,23 @@ class DocFusionWindow(QMainWindow):
     def load_cross_document_entities(self) -> None:
         self._run_api("加载跨文档关联", cross_document_entities, self._on_fusion_rows)
 
+    def load_entity_graph(self) -> None:
+        self._run_api("加载实体关系图谱", self.client.entity_graph, self._on_entity_graph)
+
+    def load_demo_data(self) -> None:
+        self._run_api("加载演示数据", self.client.load_demo_data, lambda data: self._after_mutation(data, "演示数据已加载"))
+
+    def export_full_report(self) -> None:
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出全流程报告",
+            str(Path.home() / "Downloads" / "docfusion_full_report.docx"),
+            "Word (*.docx)",
+        )
+        if target:
+            self._run_api("导出全流程报告", lambda: self.client.download_full_report(target), self._on_document_downloaded)
+
+
     def upload_document(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1415,6 +1475,19 @@ class DocFusionWindow(QMainWindow):
             lambda data: self._after_mutation(data, "版本已回滚"),
         )
 
+    def show_selected_version_diff(self) -> None:
+        selected = self._selected_version()
+        doc = self._selected_document()
+        if not selected or not doc:
+            QMessageBox.information(self, "未选择版本", "请先选择要对比的版本。")
+            return
+        self._run_api(
+            "加载版本差异",
+            lambda: self.client.document_version_diff(int(doc["id"]), int(selected["id"])),
+            self._on_version_diff,
+        )
+
+
     def execute_document_command(self) -> None:
         doc_id = self._require_selected_doc()
         if not doc_id:
@@ -1473,6 +1546,37 @@ class DocFusionWindow(QMainWindow):
             lambda: self.client.fill_template(self.latest_template_id, document_ids=document_ids),
             self._on_fill_started,
         )
+
+    def review_template_fill(self) -> None:
+        if not self.latest_template_id:
+            QMessageBox.information(self, "缺少模板", "请先上传模板。")
+            return
+        document_ids = [self.selected_doc_id] if self.selected_doc_id else []
+        self._run_api(
+            "审核模板匹配",
+            lambda: self.client.review_template_fill(self.latest_template_id, document_ids=document_ids),
+            self._on_template_review,
+        )
+
+    def confirm_reviewed_fill(self) -> None:
+        if not self.latest_template_id:
+            QMessageBox.information(self, "缺少模板", "请先上传模板。")
+            return
+        fill_map = {}
+        for row in range(self.template_review_table.rowCount()):
+            field = self.template_review_table.item(row, 0)
+            value = self.template_review_table.item(row, 1)
+            if field and value and value.text().strip():
+                fill_map[field.text()] = value.text().strip()
+        if not fill_map:
+            QMessageBox.information(self, "没有确认项", "请先审核匹配结果，保留需要填写的建议值。")
+            return
+        self._run_api(
+            "确认智能填写",
+            lambda: self.client.confirmed_template_fill(self.latest_template_id, fill_map),
+            self._on_confirmed_fill,
+        )
+
 
     def check_fill_status(self) -> None:
         if not self.latest_task_id:
@@ -1939,6 +2043,42 @@ class DocFusionWindow(QMainWindow):
                 self.fusion_table.setItem(row, col, table_item)
         self.fusion_table.resizeColumnsToContents()
         self.log(f"跨文档实体关联已更新：{len(rows)} 条")
+
+    def _on_entity_graph(self, graph: dict[str, Any]) -> None:
+        if hasattr(self, "entity_graph_view"):
+            self.entity_graph_view.setPlainText(self._pretty(graph))
+        node_count = len(graph.get("nodes", []))
+        edge_count = len(graph.get("edges", []))
+        self.log(f"实体关系图谱已加载：{node_count} 节点 / {edge_count} 边")
+
+    def _on_version_diff(self, data: dict[str, Any]) -> None:
+        text = data.get("diff") or "无文本差异"
+        if hasattr(self, "version_diff_view"):
+            self.version_diff_view.setPlainText(text)
+        self.log("版本差异已加载")
+
+    def _on_template_review(self, data: dict[str, Any]) -> None:
+        suggestions = data.get("suggestions") or []
+        self.template_review_suggestions = suggestions
+        if hasattr(self, "template_review_table"):
+            self.template_review_table.setRowCount(len(suggestions))
+            for row, item in enumerate(suggestions):
+                values = [
+                    item.get("field", ""),
+                    item.get("suggested_value", ""),
+                    item.get("entity_type", ""),
+                    item.get("confidence", ""),
+                ]
+                for col, value in enumerate(values):
+                    self.template_review_table.setItem(row, col, QTableWidgetItem(str(value)))
+            self.template_review_table.resizeColumnsToContents()
+        self.template_status.setText(f"审核完成：{len(suggestions)} 个字段，可手动修改建议值后确认填写")
+        self.log(f"模板审核完成：{self._pretty(data)}")
+
+    def _on_confirmed_fill(self, data: dict[str, Any]) -> None:
+        self.template_status.setText(f"确认填写完成：{data.get('message', '')}")
+        self.log(f"确认智能填写完成：{self._pretty(data)}")
+
 
     def _on_crawl_progress(self, event: dict[str, Any]) -> None:
         current = int(event.get("current") or 0)

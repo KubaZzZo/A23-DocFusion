@@ -50,6 +50,41 @@ class TemplateWorkflow:
         task = FillTaskDAO.create(tpl.id)
         return {"task_id": task.id, "status": "pending", "template_path": tpl.file_path, "entities": entities}
 
+    def review_fill(self, template_id: int, document_ids: list[int] | None = None) -> dict:
+        tpl = TemplateDAO.get_by_id(template_id)
+        if not tpl:
+            raise WorkflowNotFoundError("模板不存在")
+
+        fields = self._template_field_names(tpl)
+        entities = self.collect_entities(document_ids or [])
+        suggestions = []
+        for field_name in fields:
+            match = self._best_entity_for_field(field_name, entities)
+            suggestions.append(
+                {
+                    "field": field_name,
+                    "suggested_value": match.get("value", "") if match else "",
+                    "entity_type": match.get("type", "") if match else "",
+                    "confidence": match.get("confidence", 0) if match else 0,
+                    "status": "suggested" if match else "unmatched",
+                }
+            )
+        return {"template_id": template_id, "fields": fields, "suggestions": suggestions}
+
+    async def fill_confirmed(self, template_id: int, fill_map: dict) -> dict:
+        tpl = TemplateDAO.get_by_id(template_id)
+        if not tpl:
+            raise WorkflowNotFoundError("模板不存在")
+        try:
+            analysis = json.loads(tpl.fields_json or "{}")
+        except json.JSONDecodeError:
+            analysis = {}
+        fields = analysis.get("fields") or []
+        field_names = analysis.get("field_names") or []
+        if fields:
+            return self._write_confirmed_fill(tpl.file_path, fields, field_names, fill_map)
+        return await self.fill_confirmed_map(tpl.file_path, fill_map)
+
     @staticmethod
     def collect_entities(document_ids: list[int]) -> list[dict]:
         entities = []
@@ -66,6 +101,42 @@ class TemplateWorkflow:
                     {"type": entity.entity_type, "value": entity.entity_value, "confidence": entity.confidence}
                 )
         return entities
+
+    @staticmethod
+    def _template_field_names(template) -> list[str]:
+        try:
+            payload = json.loads(template.fields_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        field_names = payload.get("field_names") or []
+        return [str(name) for name in field_names if str(name).strip()]
+
+    @staticmethod
+    def _best_entity_for_field(field_name: str, entities: list[dict]) -> dict | None:
+        normalized = field_name.lower()
+        aliases = {
+            "organization": {"organization", "company", "甲方", "乙方", "客户", "供应商"},
+            "amount": {"amount", "金额", "合同金额", "预算"},
+            "date": {"date", "日期", "签署日期", "时间"},
+            "project": {"project", "项目", "项目名称"},
+        }
+        candidate_types = set()
+        for entity_type, names in aliases.items():
+            if normalized == entity_type or field_name in names or any(name.lower() in normalized for name in names):
+                candidate_types.add(entity_type)
+        if not candidate_types:
+            candidate_types.add(normalized)
+
+        matches = [
+            entity
+            for entity in entities
+            if str(entity.get("type", "")).lower() in candidate_types or normalized in str(entity.get("type", "")).lower()
+        ]
+        if not matches:
+            matches = entities
+        if not matches:
+            return None
+        return max(matches, key=lambda item: float(item.get("confidence") or 0))
 
     async def do_fill(self, task_id: int, template_path: str, entities: list[dict]):
         FillTaskDAO.update_status(task_id, "processing")
@@ -142,6 +213,41 @@ class TemplateWorkflow:
             "accuracy": filled_count / total_count if total_count else 0,
             "filled_cells": filled_cells,
             "total_cells": total_cells,
+            "message": f"{filled_count}/{total_count} fields matched, written to {filled_cells} cells",
+            "unmatched": unmatched_names,
+        }
+
+    @staticmethod
+    def _write_confirmed_fill(template_path: str, fields: list[dict], field_names: list[str], fill_map: dict) -> dict:
+        path = Path(template_path)
+        suffix = path.suffix.lower()
+        if suffix not in {".xlsx", ".docx"}:
+            raise ValueError(f"不支持的模板格式: {suffix}")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_name = f"{path.stem}_filled_{timestamp}{suffix}"
+        output_path = OUTPUT_DIR / output_name
+        shutil.copyfile(template_path, output_path)
+        output_path.chmod(0o666)
+
+        filler = TemplateFiller()
+        if suffix == ".xlsx":
+            filler._fill_xlsx(str(output_path), fields, fill_map)
+        else:
+            filler._fill_docx(str(output_path), fields, fill_map)
+
+        filled_count = sum(1 for field_name in field_names if field_name in fill_map)
+        filled_cells = sum(1 for field in fields if field["field_name"] in fill_map)
+        unmatched_names = [field_name for field_name in field_names if field_name not in fill_map]
+        total_count = len(field_names)
+        return {
+            "success": True,
+            "output_path": str(output_path),
+            "filled": filled_count,
+            "total": total_count,
+            "accuracy": filled_count / total_count if total_count else 0,
+            "filled_cells": filled_cells,
+            "total_cells": len(fields),
             "message": f"{filled_count}/{total_count} fields matched, written to {filled_cells} cells",
             "unmatched": unmatched_names,
         }
