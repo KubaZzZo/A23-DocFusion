@@ -595,7 +595,7 @@ user_command:
         if op == "replace" and "index" in params:
             idx = params["index"]
             if idx < len(doc.paragraphs):
-                doc.paragraphs[idx].text = params.get("text", "")
+                self._replace_paragraph_text_preserving_style(doc.paragraphs[idx], params.get("text", ""))
         elif op == "insert":
             doc.add_paragraph(params.get("text", ""))
         elif op == "delete" and "index" in params:
@@ -606,6 +606,15 @@ user_command:
 
         doc.save(doc_path)
         return {"success": True, "message": "Edit completed"}
+
+    @staticmethod
+    def _replace_paragraph_text_preserving_style(paragraph, text: str) -> None:
+        if not paragraph.runs:
+            paragraph.add_run(text)
+            return
+        paragraph.runs[0].text = text
+        for run in paragraph.runs[1:]:
+            run.text = ""
 
     def _handle_find_replace(self, doc_path: str, params: dict) -> dict:
         doc = DocxDocument(doc_path)

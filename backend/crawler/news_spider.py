@@ -65,7 +65,7 @@ class NewsSpider:
     def __init__(self):
         self.client = httpx.Client(
             timeout=15,
-            follow_redirects=False,
+            follow_redirects=True,
             headers={"User-Agent": random.choice(USER_AGENTS)},
         )
 

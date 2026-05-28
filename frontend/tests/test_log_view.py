@@ -24,3 +24,21 @@ def test_log_view_appends_incrementally_and_limits_blocks():
     assert "event-509" in text
     assert window.log_view.document().blockCount() <= 500
     window.close()
+
+
+def test_log_view_does_not_read_full_log_for_each_append(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = DocFusionWindow()
+    calls = []
+
+    def fail_to_plain_text():
+        calls.append(True)
+        raise AssertionError("log() should not rebuild or scan the full log text")
+
+    monkeypatch.setattr(window.log_view, "toPlainText", fail_to_plain_text)
+
+    window.log("one event")
+
+    assert calls == []
+    assert "one event" in window.log_view.document().toPlainText()
+    window.close()

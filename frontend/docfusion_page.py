@@ -2364,7 +2364,8 @@ class DocFusionWindow(QMainWindow):
 
     def log(self, message: str) -> None:
         if hasattr(self, "log_view"):
-            if self.log_view.toPlainText() == "等待操作...":
+            first_block = self.log_view.document().firstBlock()
+            if self.log_view.document().blockCount() == 1 and first_block.text().endswith("..."):
                 self.log_view.clear()
             self.log_view.appendPlainText(str(message))
             self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())

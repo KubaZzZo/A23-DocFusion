@@ -29,6 +29,9 @@ backend/data/
 *.db
 *.sqlite
 *.sqlite3
+**/*.db
+**/*.sqlite
+**/*.sqlite3
 *.log
 logs/
 tmp/

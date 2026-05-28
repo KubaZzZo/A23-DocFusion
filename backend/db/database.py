@@ -242,9 +242,7 @@ class EntityDAO:
                     func.count(Entity.id).label("count"),
                     func.count(distinct(Entity.document_id)).label("doc_count"),
                     func.avg(Entity.confidence).label("avg_confidence"),
-                    func.group_concat(distinct(Document.filename)).label("documents"),
                 )
-                .join(Document, Entity.document_id == Document.id)
                 .filter(Entity.entity_value != "")
                 .group_by(Entity.entity_type, Entity.entity_value)
                 .having(func.count(distinct(Entity.document_id)) >= min_documents)
@@ -258,17 +256,27 @@ class EntityDAO:
                 .all()
             )
 
-        return [
-            {
-                "type": entity_type,
-                "value": entity_value,
-                "count": count,
-                "doc_count": doc_count,
-                "documents": sorted(documents.split(",")) if documents else [],
-                "avg_confidence": avg_confidence,
-            }
-            for entity_type, entity_value, count, doc_count, avg_confidence, documents in rows
-        ]
+            result = []
+            for entity_type, entity_value, count, doc_count, avg_confidence in rows:
+                documents = (
+                    s.query(Document.filename)
+                    .join(Entity, Entity.document_id == Document.id)
+                    .filter(Entity.entity_type == entity_type, Entity.entity_value == entity_value)
+                    .distinct()
+                    .order_by(Document.filename.asc())
+                    .all()
+                )
+                result.append(
+                    {
+                        "type": entity_type,
+                        "value": entity_value,
+                        "count": count,
+                        "doc_count": doc_count,
+                        "documents": [filename for (filename,) in documents],
+                        "avg_confidence": avg_confidence,
+                    }
+                )
+            return result
 
 
 class TemplateDAO:

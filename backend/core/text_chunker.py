@@ -28,10 +28,7 @@ class TextChunker:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                 # 保留重叠部分
-                if overlap > 0 and current_chunk:
-                    current_chunk = current_chunk[-overlap:] + "\n" + para
-                else:
-                    current_chunk = para
+                current_chunk = para
             else:
                 current_chunk += "\n" + para if current_chunk else para
 
