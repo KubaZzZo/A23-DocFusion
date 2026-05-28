@@ -240,7 +240,7 @@ class DocFusionWindow(QMainWindow):
         status_layout.setSpacing(8)
         self.api_status_tag = Tag("正在检测后端", AMBER_SOFT, AMBER)
         status_layout.addWidget(self.api_status_tag)
-        self.api_status_text = QLabel("连接 http://127.0.0.1:8000/api")
+        self.api_status_text = QLabel("连接 https://docx.zhuoruan.xyz/api")
         self.api_status_text.setObjectName("muted")
         self.api_status_text.setWordWrap(True)
         status_layout.addWidget(self.api_status_text)
@@ -1541,7 +1541,7 @@ class DocFusionWindow(QMainWindow):
         self.refresh_all()
 
     def reset_api_url(self) -> None:
-        self.base_url_input.setText("http://127.0.0.1:8000/api")
+        self.base_url_input.setText("https://docx.zhuoruan.xyz/api")
         self.apply_api_url()
 
     def load_provider_settings(self) -> None:

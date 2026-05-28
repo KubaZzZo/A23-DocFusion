@@ -22,7 +22,7 @@ class ApiError(RuntimeError):
 class DocFusionApiClient:
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:8000/api",
+        base_url: str = "https://docx.zhuoruan.xyz/api",
         project_root: Path | None = None,
         timeout: float = 20,
     ):

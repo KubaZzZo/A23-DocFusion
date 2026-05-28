@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_SERVER_TASK_URL = "http://127.0.0.1:8010"
+DEFAULT_SERVER_TASK_URL = "https://docx.zhuoruan.xyz/toolkit"
 
 
 class ServerTaskError(RuntimeError):

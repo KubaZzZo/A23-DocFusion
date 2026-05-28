@@ -26,7 +26,7 @@ def test_server_task_config_round_trips_to_json_file(tmp_path):
 def test_server_task_config_uses_defaults_for_missing_file(tmp_path):
     loaded = load_server_task_config(tmp_path / "missing.json")
 
-    assert loaded.base_url == "http://127.0.0.1:8010"
+    assert loaded.base_url == "https://docx.zhuoruan.xyz/toolkit"
     assert loaded.token == ""
 
 

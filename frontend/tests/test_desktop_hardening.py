@@ -19,8 +19,8 @@ def make_window():
 
 
 def test_desktop_defaults_use_loopback_services():
-    assert DocFusionApiClient().base_url == "http://127.0.0.1:8000/api"
-    assert DEFAULT_SERVER_TASK_URL == "http://127.0.0.1:8010"
+    assert DocFusionApiClient().base_url == "https://docx.zhuoruan.xyz/api"
+    assert DEFAULT_SERVER_TASK_URL == "https://docx.zhuoruan.xyz/toolkit"
 
 
 def test_server_task_widgets_are_not_rebuilt_by_dead_page():
