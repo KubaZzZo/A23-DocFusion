@@ -145,6 +145,31 @@ def test_task_service_lists_tasks_with_status_filter(tmp_path):
     assert [task["task_id"] for task in tasks] == ["task_1"]
 
 
+def test_task_service_list_tasks_uses_status_index(tmp_path, monkeypatch):
+    service = TaskService(tmp_path / "tasks")
+    service.submit(
+        {
+            "level": "L1",
+            "requires_agent": False,
+            "inputs": [],
+            "outputs": [],
+            "timeout_seconds": 60,
+            "steps": [],
+        },
+        [],
+        task_id="task_1",
+    )
+
+    def fail_scan():
+        raise AssertionError("list_tasks should use the status index instead of scanning every task")
+
+    monkeypatch.setattr(service, "_scan_status_files", fail_scan)
+
+    tasks = service.list_tasks(status="queued")
+
+    assert [task["task_id"] for task in tasks] == ["task_1"]
+
+
 def test_task_service_cancel_queued_task(tmp_path):
     service = TaskService(tmp_path / "tasks")
     service.submit(
@@ -251,3 +276,29 @@ def test_task_service_cleanup_expired_tasks(tmp_path):
 
     assert removed == ["task_old"]
     assert not workspace.root.exists()
+    assert service.list_tasks() == []
+
+
+def test_task_service_cleanup_expired_tasks_handles_naive_timestamps(tmp_path):
+    service = TaskService(tmp_path / "tasks")
+    task = service.submit(
+        {
+            "level": "L1",
+            "requires_agent": False,
+            "inputs": [],
+            "outputs": [],
+            "timeout_seconds": 60,
+            "steps": [],
+        },
+        [],
+        task_id="task_old",
+    )
+    workspace = service.get_workspace(task.task_id)
+    old_time = (datetime.now() - timedelta(hours=25)).isoformat()
+    status = service.get_status(task.task_id)
+    status.update({"status": "completed", "completed_at": old_time})
+    service._write_status(workspace, status)
+
+    removed = service.cleanup_expired_tasks(now=datetime.now(timezone.utc))
+
+    assert removed == ["task_old"]

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import secrets
 import tempfile
 import uuid
 from pathlib import Path
@@ -30,6 +32,7 @@ def create_app(
     max_concurrent_tasks: int = 1,
     task_queue_size: int = 20,
     bearer_token: str | None = None,
+    bearer_token_file: str | Path | None = None,
     execution_backend: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DocFusion Server Toolkit API", version="0.1.0")
@@ -43,13 +46,29 @@ def create_app(
         executor=executor,
     )
     allowed = allowed_extensions or {"docx", "xlsx", "pptx", "pdf", "txt", "md", "html", "csv", "jpg", "jpeg", "png", "tiff"}
-    token = bearer_token if bearer_token is not None else os.getenv("DOCFUSION_API_TOKEN")
+    token = _load_bearer_token(bearer_token, bearer_token_file)
+    cleanup_interval_seconds = int(os.getenv("DOCFUSION_TASK_CLEANUP_INTERVAL_SECONDS", "3600"))
+
+    @app.on_event("startup")
+    async def startup_cleanup():
+        service.cleanup_expired_tasks()
+        app.state.cleanup_task = asyncio.create_task(_periodic_cleanup(service, cleanup_interval_seconds))
+
+    @app.on_event("shutdown")
+    async def shutdown_cleanup():
+        cleanup_task = getattr(app.state, "cleanup_task", None)
+        if cleanup_task:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         if not token:
             return
         expected = f"Bearer {token}"
-        if authorization != expected:
+        if not authorization or not secrets.compare_digest(authorization, expected):
             raise _api_error(401, "UNAUTHORIZED", "valid Bearer token is required")
 
     @app.exception_handler(HTTPException)
@@ -188,6 +207,17 @@ def _api_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code, {"error": {"code": code, "message": message, "detail": None}})
 
 
+def _load_bearer_token(bearer_token: str | None, bearer_token_file: str | Path | None) -> str | None:
+    if bearer_token is not None:
+        return bearer_token
+    token_file = bearer_token_file or os.getenv("DOCFUSION_API_TOKEN_FILE")
+    if token_file:
+        path = Path(token_file)
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    return os.getenv("DOCFUSION_API_TOKEN")
+
+
 def _build_executor(service: TaskService, backend: str):
     normalized = backend.strip().lower()
     if normalized == "local":
@@ -221,3 +251,10 @@ def _event_name(raw: object) -> str:
         "error": "error",
     }
     return mapping.get(str(raw), "progress")
+
+
+async def _periodic_cleanup(service: TaskService, interval_seconds: int) -> None:
+    interval = max(60, interval_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        service.cleanup_expired_tasks()

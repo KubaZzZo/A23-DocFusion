@@ -37,6 +37,7 @@ class TaskService:
     def __init__(self, tasks_root: str | Path):
         self.tasks_root = Path(tasks_root)
         self.tasks_root.mkdir(parents=True, exist_ok=True)
+        self.index_file = self.tasks_root / "task_index.json"
 
     def submit(
         self,
@@ -144,8 +145,7 @@ class TaskService:
 
     def list_tasks(self, status: str = "all", limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         tasks = []
-        for status_file in sorted(self.tasks_root.glob("*/status.json")):
-            task_status = json.loads(status_file.read_text(encoding="utf-8"))
+        for task_status in self._load_indexed_statuses():
             if status != "all" and task_status.get("status") != status:
                 continue
             tasks.append(task_status)
@@ -181,7 +181,7 @@ class TaskService:
             "cancelled": cancelled_ttl,
         }
         removed: list[str] = []
-        for status_file in sorted(self.tasks_root.glob("*/status.json")):
+        for status_file in sorted(self._scan_status_files()):
             try:
                 status = json.loads(status_file.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
@@ -190,11 +190,13 @@ class TaskService:
             completed_at = status.get("completed_at")
             if ttl is None or not completed_at:
                 continue
-            finished_at = datetime.fromisoformat(str(completed_at))
+            finished_at = _parse_datetime(str(completed_at))
             if current_time - finished_at > ttl:
                 task_id = str(status.get("task_id") or status_file.parent.name)
                 shutil.rmtree(status_file.parent)
                 removed.append(task_id)
+        if removed:
+            self._rebuild_index()
         return removed
 
     @staticmethod
@@ -211,6 +213,57 @@ class TaskService:
         )
         temp_file.replace(status_file)
 
+        service = TaskService(workspace.root.parent)
+        service._upsert_index(status)
+
+    def _scan_status_files(self) -> list[Path]:
+        return sorted(self.tasks_root.glob("*/status.json"))
+
+    def _load_indexed_statuses(self) -> list[dict[str, Any]]:
+        if not self.index_file.exists():
+            self._rebuild_index()
+        try:
+            data = json.loads(self.index_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = []
+        if not isinstance(data, list):
+            data = []
+        return [item for item in data if isinstance(item, dict)]
+
+    def _upsert_index(self, status: dict[str, Any]) -> None:
+        task_id = status.get("task_id")
+        if not task_id:
+            return
+        items = self._load_indexed_statuses() if self.index_file.exists() else []
+        by_id = {str(item.get("task_id")): item for item in items if item.get("task_id")}
+        by_id[str(task_id)] = status
+        ordered = sorted(by_id.values(), key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        self._write_index(ordered)
+
+    def _rebuild_index(self) -> None:
+        statuses = []
+        for status_file in self._scan_status_files():
+            try:
+                status = json.loads(status_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(status, dict):
+                statuses.append(status)
+        statuses.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        self._write_index(statuses)
+
+    def _write_index(self, statuses: list[dict[str, Any]]) -> None:
+        temp_file = self.tasks_root / "task_index.json.tmp"
+        temp_file.write_text(json.dumps(statuses, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_file.replace(self.index_file)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(timezone.utc)

@@ -1,9 +1,12 @@
 import json
+import secrets
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
 from server_toolkit.api_app import create_app
+from server_toolkit.task_service import TaskService
 
 
 def test_api_submit_task_runs_and_returns_completed_status(tmp_path):
@@ -244,6 +247,57 @@ def test_api_accepts_valid_bearer_token_when_configured(tmp_path):
 
     assert response.status_code == 200
     assert response.json()["tasks"] == []
+
+
+def test_api_uses_constant_time_bearer_token_compare(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_compare(left, right):
+        calls.append((left, right))
+        return False
+
+    monkeypatch.setattr(secrets, "compare_digest", fake_compare)
+    app = create_app(tmp_path / "tasks", bearer_token="secret")
+    client = TestClient(app)
+
+    response = client.get("/api/server-tasks", headers={"Authorization": "Bearer wrong"})
+
+    assert response.status_code == 401
+    assert calls == [("Bearer wrong", "Bearer secret")]
+
+
+def test_api_can_load_bearer_token_from_file(tmp_path):
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-secret\n", encoding="utf-8")
+    app = create_app(tmp_path / "tasks", bearer_token_file=token_file)
+    client = TestClient(app)
+
+    rejected = client.get("/api/server-tasks", headers={"Authorization": "Bearer wrong"})
+    accepted = client.get("/api/server-tasks", headers={"Authorization": "Bearer file-secret"})
+
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+
+
+def test_api_startup_cleans_expired_tasks(tmp_path):
+    tasks_root = tmp_path / "tasks"
+    service = TaskService(tasks_root)
+    task = service.submit(_copy_plan(), [], task_id="task_old")
+    workspace = service.get_workspace(task.task_id)
+    status = service.get_status(task.task_id)
+    status.update(
+        {
+            "status": "completed",
+            "completed_at": (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(),
+        }
+    )
+    service._write_status(workspace, status)
+    app = create_app(tasks_root)
+
+    with TestClient(app):
+        pass
+
+    assert not workspace.root.exists()
 
 
 def test_api_rejects_invalid_list_parameters(tmp_path):
