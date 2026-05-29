@@ -1,6 +1,7 @@
 """Local API authentication helpers."""
 import hmac
 import os
+import subprocess
 import secrets
 from pathlib import Path
 from urllib.parse import urlparse
@@ -11,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from config import DATA_DIR
 
 TOKEN_ENV_VAR = "DOCFUSION_API_TOKEN"
+TOKEN_FILE_ENV_VAR = "DOCFUSION_API_TOKEN_FILE"
 TOKEN_FILE = DATA_DIR / "api_token.txt"
 LOCAL_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -25,17 +27,47 @@ def get_api_token(token_file: Path = TOKEN_FILE) -> str:
     if env_token:
         return env_token
 
+    env_token_file = os.getenv(TOKEN_FILE_ENV_VAR, "").strip()
+    if env_token_file:
+        configured_token_file = Path(env_token_file)
+        if configured_token_file.exists():
+            _secure_token_file(configured_token_file)
+            return configured_token_file.read_text(encoding="utf-8").strip()
+        raise RuntimeError(f"Configured API token file does not exist: {configured_token_file}")
+
     if token_file.exists():
+        _secure_token_file(token_file)
         return token_file.read_text(encoding="utf-8").strip()
 
     token_file.parent.mkdir(exist_ok=True)
     token = secrets.token_urlsafe(32)
     token_file.write_text(token, encoding="utf-8")
+    _secure_token_file(token_file)
+    return token
+
+
+def _secure_token_file(token_file: Path) -> None:
     try:
         os.chmod(token_file, 0o600)
     except OSError:
         pass
-    return token
+    if os.name == "nt":
+        _restrict_windows_token_acl(token_file)
+
+
+def _restrict_windows_token_acl(token_file: Path) -> None:
+    user = os.getenv("USERNAME")
+    if not user:
+        return
+    try:
+        subprocess.run(
+            ["icacls", str(token_file), "/inheritance:r", "/grant:r", f"{user}:F"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        pass
 
 
 def _is_local_client(request: Request) -> bool:

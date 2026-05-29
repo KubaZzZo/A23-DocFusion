@@ -246,6 +246,21 @@ def test_api_accepts_valid_bearer_token_when_configured(tmp_path):
     assert response.json()["tasks"] == []
 
 
+def test_api_reads_bearer_token_from_configured_file(tmp_path, monkeypatch):
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-secret\n", encoding="utf-8")
+    monkeypatch.setenv("DOCFUSION_API_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("DOCFUSION_API_TOKEN", raising=False)
+    app = create_app(tmp_path / "tasks")
+    client = TestClient(app)
+
+    missing = client.get("/api/server-tasks")
+    accepted = client.get("/api/server-tasks", headers={"Authorization": "Bearer file-secret"})
+
+    assert missing.status_code == 401
+    assert accepted.status_code == 200
+
+
 def test_api_rejects_invalid_list_parameters(tmp_path):
     app = create_app(tmp_path / "tasks")
     client = TestClient(app)

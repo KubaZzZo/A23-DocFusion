@@ -42,7 +42,7 @@ Rules:
 - For font names use exact names like "宋体", "黑体", "SimSun", "SimHei", "Arial"
 - For colors use RGBColor(r, g, b) with values 0-255
 - For font sizes use Pt(size)
-- When setting font_name on a run, also set run.font.name and for Chinese fonts set run._element.rPr.rFonts.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}eastAsia', font_name) to handle East Asian characters
+- When setting font_name on a run, also set run.font.name and for Chinese fonts set run._element.rPr.rFonts.set('{{http://schemas.openxmlformats.org/wordprocessingml/2006/main}}eastAsia', font_name) to handle East Asian characters
 - Handle table rows separately from paragraphs
 - Save the document after changes
 - Print a brief summary of what was done

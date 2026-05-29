@@ -43,7 +43,7 @@ def create_app(
         executor=executor,
     )
     allowed = allowed_extensions or {"docx", "xlsx", "pptx", "pdf", "txt", "md", "html", "csv", "jpg", "jpeg", "png", "tiff"}
-    token = bearer_token if bearer_token is not None else os.getenv("DOCFUSION_API_TOKEN")
+    token = bearer_token if bearer_token is not None else _load_bearer_token()
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         if not token:
@@ -182,6 +182,20 @@ def create_app(
             raise HTTPException(404, str(exc)) from exc
 
     return app
+
+
+def _load_bearer_token() -> str | None:
+    env_token = os.getenv("DOCFUSION_API_TOKEN")
+    if env_token:
+        return env_token
+
+    token_file = os.getenv("DOCFUSION_API_TOKEN_FILE")
+    if not token_file:
+        return None
+    path = Path(token_file)
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8").strip()
 
 
 def _api_error(status_code: int, code: str, message: str) -> HTTPException:

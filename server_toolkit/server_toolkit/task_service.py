@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,6 +39,7 @@ class TaskService:
     def __init__(self, tasks_root: str | Path):
         self.tasks_root = Path(tasks_root)
         self.tasks_root.mkdir(parents=True, exist_ok=True)
+        self._status_write_lock = threading.Lock()
 
     def submit(
         self,
@@ -201,15 +204,20 @@ class TaskService:
     def now() -> str:
         return _now()
 
-    @staticmethod
-    def _write_status(workspace: TaskWorkspace, status: dict[str, Any]) -> None:
+    def _write_status(self, workspace: TaskWorkspace, status: dict[str, Any]) -> None:
         status_file = workspace.root / "status.json"
         temp_file = workspace.root / "status.json.tmp"
-        temp_file.write_text(
-            json.dumps(status, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp_file.replace(status_file)
+        payload = json.dumps(status, ensure_ascii=False, indent=2)
+        with self._status_write_lock:
+            temp_file.write_text(payload, encoding="utf-8")
+            for attempt in range(5):
+                try:
+                    temp_file.replace(status_file)
+                    return
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
 
 
 def _now() -> str:

@@ -1,28 +1,1292 @@
 [
   {
-    "input_file": "sample.txt",
+    "input_file": "golden_01.txt",
     "expected_entities": [
-      {"type": "organization", "value": "北京科技有限公司"},
-      {"type": "organization", "value": "上海创新企业"},
-      {"type": "date", "value": "2024年3月15日"},
-      {"type": "money", "value": "500000元"},
-      {"type": "person", "value": "张伟"},
-      {"type": "phone", "value": "13800138000"}
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "??????"
+      },
+      {
+        "type": "date",
+        "value": "2024-01-01"
+      },
+      {
+        "type": "amount",
+        "value": "100,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000000"
+      },
+      {
+        "type": "email",
+        "value": "contact01@example.com"
+      },
+      {
+        "type": "address",
+        "value": "???????????1?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000000"
+      }
     ],
     "min_recall": 0.8,
-    "description": "Basic contract document with common entity types"
+    "description": "contract golden sample"
   },
   {
-    "input_file": "sample.md",
+    "input_file": "golden_02.txt",
     "expected_entities": [
-      {"type": "organization", "value": "深圳智能科技股份有限公司"},
-      {"type": "date", "value": "2023-06-20"},
-      {"type": "money", "value": "10000000元"},
-      {"type": "person", "value": "李明"},
-      {"type": "phone", "value": "0755-88889999"},
-      {"type": "email", "value": "contact@example.com"}
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-02-02"
+      },
+      {
+        "type": "amount",
+        "value": "123,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000001"
+      },
+      {
+        "type": "email",
+        "value": "contact02@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????88?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000001"
+      }
     ],
     "min_recall": 0.8,
-    "description": "Markdown format company information"
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_03.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-03-03"
+      },
+      {
+        "type": "amount",
+        "value": "146,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000002"
+      },
+      {
+        "type": "email",
+        "value": "contact03@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????12?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000002"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_04.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "???????"
+      },
+      {
+        "type": "date",
+        "value": "2024-04-04"
+      },
+      {
+        "type": "amount",
+        "value": "169,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000003"
+      },
+      {
+        "type": "email",
+        "value": "contact04@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????66?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000003"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_05.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-05-05"
+      },
+      {
+        "type": "amount",
+        "value": "192,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000004"
+      },
+      {
+        "type": "email",
+        "value": "contact05@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????99?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000004"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_06.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-06-06"
+      },
+      {
+        "type": "amount",
+        "value": "215,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000005"
+      },
+      {
+        "type": "email",
+        "value": "contact06@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????18?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000005"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_07.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-07-07"
+      },
+      {
+        "type": "amount",
+        "value": "238,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000006"
+      },
+      {
+        "type": "email",
+        "value": "contact07@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????200?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000006"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_08.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????"
+      },
+      {
+        "type": "date",
+        "value": "2024-08-08"
+      },
+      {
+        "type": "amount",
+        "value": "261,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000007"
+      },
+      {
+        "type": "email",
+        "value": "contact08@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????1037?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000007"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_09.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-09-09"
+      },
+      {
+        "type": "amount",
+        "value": "284,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000008"
+      },
+      {
+        "type": "email",
+        "value": "contact09@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????55?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000008"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_10.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "???????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-10-10"
+      },
+      {
+        "type": "amount",
+        "value": "307,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000009"
+      },
+      {
+        "type": "email",
+        "value": "contact10@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????328?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000009"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_11.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "??????"
+      },
+      {
+        "type": "date",
+        "value": "2024-11-11"
+      },
+      {
+        "type": "amount",
+        "value": "330,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000010"
+      },
+      {
+        "type": "email",
+        "value": "contact11@example.com"
+      },
+      {
+        "type": "address",
+        "value": "???????????1?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000010"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_12.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-12-12"
+      },
+      {
+        "type": "amount",
+        "value": "353,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000011"
+      },
+      {
+        "type": "email",
+        "value": "contact12@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????88?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000011"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_13.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-01-13"
+      },
+      {
+        "type": "amount",
+        "value": "376,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000012"
+      },
+      {
+        "type": "email",
+        "value": "contact13@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????12?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000012"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_14.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "???????"
+      },
+      {
+        "type": "date",
+        "value": "2024-02-14"
+      },
+      {
+        "type": "amount",
+        "value": "399,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000013"
+      },
+      {
+        "type": "email",
+        "value": "contact14@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????66?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000013"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_15.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-03-15"
+      },
+      {
+        "type": "amount",
+        "value": "422,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000014"
+      },
+      {
+        "type": "email",
+        "value": "contact15@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????99?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000014"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_16.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-04-16"
+      },
+      {
+        "type": "amount",
+        "value": "445,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000015"
+      },
+      {
+        "type": "email",
+        "value": "contact16@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????18?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000015"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_17.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-05-17"
+      },
+      {
+        "type": "amount",
+        "value": "468,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000016"
+      },
+      {
+        "type": "email",
+        "value": "contact17@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????200?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000016"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_18.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????"
+      },
+      {
+        "type": "date",
+        "value": "2024-06-18"
+      },
+      {
+        "type": "amount",
+        "value": "491,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000017"
+      },
+      {
+        "type": "email",
+        "value": "contact18@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????1037?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000017"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_19.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-07-19"
+      },
+      {
+        "type": "amount",
+        "value": "514,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000018"
+      },
+      {
+        "type": "email",
+        "value": "contact19@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????55?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000018"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_20.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "???????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-08-20"
+      },
+      {
+        "type": "amount",
+        "value": "537,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000019"
+      },
+      {
+        "type": "email",
+        "value": "contact20@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????328?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000019"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_21.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "??????"
+      },
+      {
+        "type": "date",
+        "value": "2024-09-21"
+      },
+      {
+        "type": "amount",
+        "value": "560,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000020"
+      },
+      {
+        "type": "email",
+        "value": "contact21@example.com"
+      },
+      {
+        "type": "address",
+        "value": "???????????1?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000020"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_22.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-10-22"
+      },
+      {
+        "type": "amount",
+        "value": "583,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000021"
+      },
+      {
+        "type": "email",
+        "value": "contact22@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????88?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000021"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_23.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-11-23"
+      },
+      {
+        "type": "amount",
+        "value": "606,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000022"
+      },
+      {
+        "type": "email",
+        "value": "contact23@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????12?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000022"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_24.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "???????"
+      },
+      {
+        "type": "date",
+        "value": "2024-12-24"
+      },
+      {
+        "type": "amount",
+        "value": "629,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000023"
+      },
+      {
+        "type": "email",
+        "value": "contact24@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????66?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000023"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_25.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-01-25"
+      },
+      {
+        "type": "amount",
+        "value": "652,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000024"
+      },
+      {
+        "type": "email",
+        "value": "contact25@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????99?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000024"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_26.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-02-26"
+      },
+      {
+        "type": "amount",
+        "value": "675,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000025"
+      },
+      {
+        "type": "email",
+        "value": "contact26@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????18?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000025"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_27.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-03-27"
+      },
+      {
+        "type": "amount",
+        "value": "698,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000026"
+      },
+      {
+        "type": "email",
+        "value": "contact27@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????200?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000026"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
+  },
+  {
+    "input_file": "golden_28.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "????????????"
+      },
+      {
+        "type": "organization",
+        "value": "?????"
+      },
+      {
+        "type": "date",
+        "value": "2024-04-01"
+      },
+      {
+        "type": "amount",
+        "value": "721,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000027"
+      },
+      {
+        "type": "email",
+        "value": "contact28@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????1037?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000027"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "contract golden sample"
+  },
+  {
+    "input_file": "golden_29.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "??????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-05-02"
+      },
+      {
+        "type": "amount",
+        "value": "744,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000028"
+      },
+      {
+        "type": "email",
+        "value": "contact29@example.com"
+      },
+      {
+        "type": "address",
+        "value": "?????????55?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000028"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "invoice golden sample"
+  },
+  {
+    "input_file": "golden_30.txt",
+    "expected_entities": [
+      {
+        "type": "organization",
+        "value": "???????????"
+      },
+      {
+        "type": "organization",
+        "value": "????????"
+      },
+      {
+        "type": "date",
+        "value": "2024-06-03"
+      },
+      {
+        "type": "amount",
+        "value": "767,000?"
+      },
+      {
+        "type": "person",
+        "value": "??"
+      },
+      {
+        "type": "phone",
+        "value": "13800000029"
+      },
+      {
+        "type": "email",
+        "value": "contact30@example.com"
+      },
+      {
+        "type": "address",
+        "value": "??????????328?"
+      },
+      {
+        "type": "id_number",
+        "value": "913100000000000029"
+      }
+    ],
+    "min_recall": 0.8,
+    "description": "report golden sample"
   }
 ]

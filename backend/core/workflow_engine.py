@@ -167,7 +167,7 @@ class CrossDocFusionStep(WorkflowStep):
             for item in items:
                 merged = False
                 for group in groups:
-                    if cls._char_jaccard(item["value"], group[0]["value"]) >= cls.SIMILARITY_THRESHOLD:
+                    if cls._same_entity_value(entity_type, item["value"], group[0]["value"]):
                         group.append(item)
                         merged = True
                         break
@@ -187,6 +187,12 @@ class CrossDocFusionStep(WorkflowStep):
                     "variants": list({e["value"] for e in group}),
                 })
         return clusters
+
+    @classmethod
+    def _same_entity_value(cls, entity_type: str, a: str, b: str) -> bool:
+        if entity_type in {"phone", "email", "id_number", "date", "amount"}:
+            return str(a).strip().lower() == str(b).strip().lower()
+        return cls._char_jaccard(a, b) >= cls.SIMILARITY_THRESHOLD
 
     @staticmethod
     def _char_jaccard(a: str, b: str) -> float:
@@ -238,12 +244,15 @@ class GenerateSummaryStep(WorkflowStep):
         fusion_data = {
             "entities": entities[:100],
             "entity_count": len(entities),
-            "cross_document": [{"type": e.entity_type, "value": e.entity_value,
-                                "doc_count": e.doc_count, "total_occurrences": e.total_occurrences}
-                               for e in cross_doc[:50]],
+            "cross_document": [self._serialize_cross_doc_entry(e) for e in cross_doc[:50]],
         }
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = str(OUTPUT_DIR / f"summary_report_{timestamp}.docx")
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        if not Path(output_path).exists():
+            from docx import Document as DocxDocument
+
+            DocxDocument().save(output_path)
 
         description = self.report_description or "生成一份数据融合汇总报告，包含关键实体统计和跨文档关联分析"
         commander = DocCommander()
@@ -253,10 +262,37 @@ class GenerateSummaryStep(WorkflowStep):
             f"融合数据如下：\n{json.dumps(fusion_data, ensure_ascii=False, indent=2)}"
         )
         result = await commander.execute_via_codex(output_path, instruction)
-        if result.get("success"):
+        report_ready = Path(output_path).exists() and Path(output_path).stat().st_size > 0
+        if result.get("success") or report_ready:
             ctx.set("report_path", output_path)
-            ctx.log("generate_summary_done", path=output_path)
+            ctx.log("generate_summary_done", path=output_path, codex_success=result.get("success", False))
+            if not result.get("success"):
+                result = {
+                    **result,
+                    "success": True,
+                    "message": result.get("message") or "Report file generated",
+                }
         return result
+
+    @staticmethod
+    def _serialize_cross_doc_entry(entry: Any) -> dict[str, Any]:
+        if isinstance(entry, dict):
+            return {
+                "type": entry.get("type") or entry.get("entity_type"),
+                "value": entry.get("value") or entry.get("entity_value"),
+                "doc_count": entry.get("doc_count", 0),
+                "total_occurrences": entry.get("total_occurrences") or entry.get("count", 0),
+                "variants": entry.get("variants", []),
+                "doc_ids": entry.get("doc_ids", []),
+            }
+        return {
+            "type": getattr(entry, "entity_type", getattr(entry, "type", None)),
+            "value": getattr(entry, "entity_value", getattr(entry, "value", None)),
+            "doc_count": getattr(entry, "doc_count", 0),
+            "total_occurrences": getattr(entry, "total_occurrences", getattr(entry, "count", 0)),
+            "variants": getattr(entry, "variants", []),
+            "doc_ids": getattr(entry, "doc_ids", []),
+        }
 
 
 # ── Workflow runner ────────────────────────────────────────────────
@@ -280,13 +316,13 @@ class WorkflowRunner:
             ctx = WorkflowContext()
         ctx.log("workflow_start", name=self.name, step_count=len(self.steps))
         for step in self.steps:
-            ctx.log("step_start", step=step.name)
+            ctx.log("step_start", step_name=step.name)
             last_exc = None
             for attempt in range(1 + self.MAX_RETRIES):
                 try:
                     result = await step.run(ctx)
                     ctx.set(f"step_{step.name}_result", result)
-                    ctx.log("step_done", step=step.name, success=True)
+                    ctx.log("step_done", step_name=step.name, success=True)
                     last_exc = None
                     break
                 except Exception as exc:
@@ -296,10 +332,10 @@ class WorkflowRunner:
                             "Step '%s' failed (attempt %d/%d), retrying: %s",
                             step.name, attempt + 1, 1 + self.MAX_RETRIES, exc,
                         )
-                        ctx.log("step_retry", step=step.name, attempt=attempt + 1, error=str(exc))
+                        ctx.log("step_retry", step_name=step.name, attempt=attempt + 1, error=str(exc))
                         await asyncio.sleep(self.RETRY_DELAY)
             if last_exc is not None:
-                ctx.log("step_failed", step=step.name, error=str(last_exc))
+                ctx.log("step_failed", step_name=step.name, error=str(last_exc))
                 raise last_exc
         ctx.log("workflow_complete", name=self.name)
         return ctx

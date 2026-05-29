@@ -72,7 +72,6 @@ def clear_cache():
         _memory_cache.clear()
     for f in CACHE_DIR.glob("*.json"):
         try:
-            f.chmod(0o666)
             f.unlink()
         except Exception:
             log.warning("Failed to clear cache file %s", f)

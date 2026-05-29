@@ -14,7 +14,10 @@ def safe_copy(src: str, dest_dir: Path) -> Path:
         dest = dest_dir / f"{src_path.stem}_{timestamp}{src_path.suffix}"
 
     shutil.copyfile(src, dest)
-    dest.chmod(0o666)
+    try:
+        dest.chmod(0o600)
+    except OSError:
+        pass
     return dest
 
 

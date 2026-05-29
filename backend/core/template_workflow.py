@@ -99,7 +99,10 @@ class TemplateWorkflow:
         output_name = f"{path.stem}_filled_{timestamp}{suffix}"
         output_path = OUTPUT_DIR / output_name
         shutil.copyfile(template_path, output_path)
-        output_path.chmod(0o666)
+        try:
+            output_path.chmod(0o600)
+        except OSError:
+            pass
 
         if suffix == ".xlsx":
             filler._fill_xlsx(str(output_path), fields, fill_map)

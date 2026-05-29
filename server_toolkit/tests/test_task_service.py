@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from server_toolkit.task_service import TaskService
 
@@ -123,6 +124,40 @@ def test_task_service_persists_status_json(tmp_path):
 
     status_file = service.get_workspace(task.task_id).root / "status.json"
     assert json.loads(status_file.read_text(encoding="utf-8"))["status"] == "queued"
+
+
+def test_task_service_retries_transient_status_replace_errors(tmp_path, monkeypatch):
+    service = TaskService(tmp_path / "tasks")
+    task = service.submit(
+        {
+            "level": "L1",
+            "requires_agent": False,
+            "inputs": [],
+            "outputs": [],
+            "timeout_seconds": 60,
+            "steps": [],
+        },
+        [],
+        task_id="task_1",
+    )
+    workspace = service.get_workspace(task.task_id)
+    status = service.get_status(task.task_id)
+    status["status"] = "running"
+    original_replace = Path.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(self, target):
+        if self.name == "status.json.tmp" and attempts["count"] == 0:
+            attempts["count"] += 1
+            raise PermissionError("transient replace failure")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+
+    service._write_status(workspace, status)
+
+    assert attempts["count"] == 1
+    assert service.get_status(task.task_id)["status"] == "running"
 
 
 def test_task_service_lists_tasks_with_status_filter(tmp_path):
