@@ -9,6 +9,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,18 +17,57 @@ from typing import Any
 from project_paths import resolve_project_root
 
 
+DEFAULT_API_URL = "https://docx.zhuoruan.xyz/api"
+
+
 class ApiError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ApiClientConfig:
+    base_url: str = DEFAULT_API_URL
+    token: str = ""
+
+
+def load_api_client_config(path: str | Path, defaults_path: str | Path | None = None) -> ApiClientConfig:
+    payload: dict[str, Any] = {}
+    if defaults_path:
+        payload.update(_read_config_payload(defaults_path))
+    payload.update(_read_config_payload(path))
+    return ApiClientConfig(
+        base_url=str(payload.get("base_url") or DEFAULT_API_URL),
+        token=str(payload.get("token") or ""),
+    )
+
+
+def _read_config_payload(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    if not source.exists():
+        return {}
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_api_client_config(config: ApiClientConfig, path: str | Path) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class DocFusionApiClient:
     def __init__(
         self,
-        base_url: str = "https://docx.zhuoruan.xyz/api",
+        base_url: str = DEFAULT_API_URL,
+        token: str = "",
         project_root: Path | None = None,
         timeout: float = 20,
     ):
         self.base_url = base_url.rstrip("/")
+        self.token = token.strip()
         self.timeout = timeout
         self.project_root = project_root or resolve_project_root()
 
@@ -88,6 +128,12 @@ class DocFusionApiClient:
     def article_detail(self, article_id: int) -> dict[str, Any]:
         return self._request("GET", f"/articles/{article_id}")
 
+    def store_articles(self, articles: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._request("POST", "/articles/store", data={"articles": articles})
+
+    def generate_article_documents(self, articles: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._request("POST", "/articles/generate-documents", data={"articles": articles})
+
     def download_document(self, doc_id: int, destination: str | Path) -> Path:
         url = self._url(f"/documents/{doc_id}/download")
         request = urllib.request.Request(url, headers={"Authorization": f"Bearer {self._token()}"}, method="GET")
@@ -128,6 +174,32 @@ class DocFusionApiClient:
             raise ApiError(self._format_http_error(exc)) from exc
         except urllib.error.URLError as exc:
             raise ApiError(f"无法连接后端服务：{exc.reason}") from exc
+
+        target = Path(destination)
+        if target.is_dir():
+            target = target / filename
+        return self._write_payload_with_fallback(payload, target)
+
+    def cross_document_entities(self, min_documents: int = 2, limit: int = 100) -> list[dict[str, Any]]:
+        return self._request(
+            "GET",
+            "/fusion/cross-document",
+            params={"min_documents": min_documents, "limit": limit},
+        )
+
+    def export_fusion_report(self, destination: str | Path, rows: list[dict[str, Any]] | None = None) -> Path:
+        url = self._url("/fusion/export")
+        headers = {"Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"}
+        body = json.dumps({"rows": rows}).encode("utf-8")
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=max(self.timeout, 60)) as response:
+                payload = response.read()
+                filename = self._filename_from_disposition(response.headers.get("Content-Disposition")) or "fusion_report.xlsx"
+        except urllib.error.HTTPError as exc:
+            raise ApiError(self._format_http_error(exc)) from exc
+        except urllib.error.URLError as exc:
+            raise ApiError(f"Cannot connect to backend service: {exc.reason}") from exc
 
         target = Path(destination)
         if target.is_dir():
@@ -231,6 +303,8 @@ class DocFusionApiClient:
         return url
 
     def _token(self) -> str:
+        if self.token:
+            return self.token
         env_token = os.getenv("DOCFUSION_API_TOKEN", "").strip()
         if env_token:
             return env_token
@@ -243,6 +317,16 @@ class DocFusionApiClient:
     def _filename_from_disposition(value: str | None) -> str | None:
         if not value:
             return None
+        encoded_match = re.search(r"filename\*=([^;]+)", value, flags=re.IGNORECASE)
+        if encoded_match:
+            encoded = encoded_match.group(1).strip().strip('"')
+            if "''" in encoded:
+                charset, _, filename = encoded.partition("''")
+                try:
+                    return urllib.parse.unquote(filename, encoding=charset or "utf-8")
+                except LookupError:
+                    return urllib.parse.unquote(filename)
+            return urllib.parse.unquote(encoded)
         match = re.search(r'filename="?([^";]+)"?', value)
         return match.group(1) if match else None
 

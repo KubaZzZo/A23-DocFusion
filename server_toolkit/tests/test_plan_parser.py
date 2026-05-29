@@ -10,6 +10,16 @@ def test_parse_instruction_builds_convert_plan():
     assert plan["steps"][0]["args"]["to"] == "pdf"
 
 
+def test_parse_instruction_builds_markdown_and_txt_convert_plans():
+    md_plan = parse_instruction("convert this Word document to Markdown", ["input/report.docx"])
+    txt_plan = parse_instruction("export this Word document as txt", ["input/report.docx"])
+
+    assert md_plan["outputs"] == ["output/report.md"]
+    assert md_plan["steps"][0]["args"]["to"] == "md"
+    assert txt_plan["outputs"] == ["output/report.txt"]
+    assert txt_plan["steps"][0]["args"]["to"] == "txt"
+
+
 def test_parse_instruction_builds_merge_plan_for_pdfs():
     plan = parse_instruction("合并这两个 PDF", ["input/a.pdf", "input/b.pdf"])
 
@@ -66,13 +76,13 @@ def test_parse_instruction_converts_markdown_before_first_line_format():
     assert plan["steps"][1]["args"]["first_line_underline"] is True
 
 
-def test_parse_instruction_builds_ocr_then_extract_l2_plan():
+def test_parse_instruction_sends_ocr_then_extract_to_agent():
     plan = parse_instruction("ocr then extract amount date vendor", ["input/invoice.png"])
 
-    assert plan["level"] == "L2"
-    assert plan["outputs"] == ["output/entities.json"]
-    assert [step["command"] for step in plan["steps"]] == ["ocr", "extract"]
-    assert plan["steps"][1]["args"]["schema"] == "amount,date,vendor"
+    assert plan["level"] == "L3"
+    assert plan["requires_agent"] is True
+    assert plan["outputs"] == ["output/invoice.docx"]
+    assert plan["steps"][0]["command"] == "agent-generate"
 
 
 def test_parse_instruction_builds_merge_then_format_l2_plan():
@@ -90,3 +100,29 @@ def test_parse_instruction_rejects_merge_format_for_non_docx_inputs():
         assert "docx" in str(exc)
     else:
         raise AssertionError("expected non-docx merge format rejection")
+
+
+def test_parse_instruction_builds_generate_plan_without_inputs():
+    plan = parse_instruction("生成一份校园采购验收报告，输出 Word 文档", [])
+
+    assert plan["level"] == "L3"
+    assert plan["requires_agent"] is True
+    assert plan["inputs"] == []
+    assert plan["outputs"] == ["output/generated.docx"]
+    assert plan["steps"][0]["command"] == "agent-generate"
+
+
+def test_parse_instruction_builds_markdown_generation_without_inputs():
+    plan = parse_instruction("generate release notes as Markdown", [])
+
+    assert plan["level"] == "L3"
+    assert plan["requires_agent"] is True
+    assert plan["outputs"] == ["output/generated.md"]
+
+
+def test_parse_instruction_builds_chinese_financial_report_generation_without_inputs():
+    plan = parse_instruction("生成一个财务报表", [])
+
+    assert plan["level"] == "L3"
+    assert plan["requires_agent"] is True
+    assert plan["outputs"] == ["output/generated.docx"]

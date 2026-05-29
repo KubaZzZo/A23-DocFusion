@@ -102,3 +102,11 @@ def test_build_agent_prompt_mentions_workspace_and_docfusion():
     assert "/workspace/input" in prompt
     assert "docfusion" in prompt
     assert "Generate report" in prompt
+
+
+def test_build_agent_prompt_can_use_real_workspace_path():
+    prompt = build_agent_prompt("Generate report", "/var/docfusion/tasks/task_1")
+
+    assert "/var/docfusion/tasks/task_1/input" in prompt
+    assert "/var/docfusion/tasks/task_1/output" in prompt
+    assert "/workspace/input" not in prompt

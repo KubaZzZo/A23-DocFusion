@@ -1,6 +1,7 @@
 """Crawled article workflow shared by API and UI callers."""
 from core.workflow_errors import WorkflowNotFoundError
 from db.database import CrawledArticleDAO
+from crawler.doc_generator import DocGenerator
 
 
 class ArticleWorkflow:
@@ -32,6 +33,13 @@ class ArticleWorkflow:
             "url": article.url,
             "category": article.category,
         }
+
+    def store_articles(self, articles: list[dict]) -> dict:
+        saved = CrawledArticleDAO.create_batch(articles) if articles else []
+        return {"saved": len(saved), "articles": len(articles)}
+
+    def generate_documents(self, articles: list[dict]) -> dict:
+        return DocGenerator.generate_all(articles)
 
 
 __all__ = ["ArticleWorkflow"]

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QThreadPool, QTimer, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -33,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from api_client import ApiError, DocFusionApiClient
+from api_client import ApiClientConfig, ApiError, DocFusionApiClient, load_api_client_config, save_api_client_config
 from crawler_service import crawl_articles, news_sources
 from server_task_client import ServerTaskClient, ServerTaskConfig, load_server_task_config, save_server_task_config
 from local_services import (
@@ -53,6 +56,7 @@ from theme import (
     AMBER_SOFT,
     BLUE,
     BODY,
+    BORDER,
     CARD,
     ELEVATED,
     GREEN,
@@ -64,10 +68,15 @@ from theme import (
     PRIMARY,
     PRIMARY_SOFT,
     RED,
+    SECTION,
     TEAL,
     TEAL_SOFT,
 )
 from workers import ApiRunnable, ProgressApiRunnable
+
+
+APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+APP_ICON = APP_ROOT / "assets" / "docfusion_icon.ico"
 
 
 class MetricCard(QFrame):
@@ -148,10 +157,11 @@ class DocFusionWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DocFusion - 文档理解与数据融合系统")
+        if APP_ICON.exists():
+            self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1440, 920)
         self.setMinimumSize(1180, 760)
 
-        self.client = DocFusionApiClient()
         self.pool = QThreadPool.globalInstance()
         self._active_runnables: set[ApiRunnable | ProgressApiRunnable] = set()
         self.nav_buttons: list[NavButton] = []
@@ -165,10 +175,24 @@ class DocFusionWindow(QMainWindow):
         self.latest_template_id: int | None = None
         self.latest_task_id: int | None = None
         self.latest_server_task_id: str | None = None
+        self.latest_generation_task_id: str | None = None
+        self.generation_preview_task_id: str | None = None
+        self.generated_document_path: Path | None = None
+        self.edited_generation_path: Path | None = None
+        self.generation_preview_download_pending = False
         self.server_task_poll_count = 0
+        self.generation_task_poll_count = 0
         self.server_task_max_polls = 120
         self.server_task_files: list[Path] = []
-        self.server_task_defaults_path = Path(__file__).resolve().parent / "server_task.defaults.json"
+        self.api_config_path = Path.home() / ".docfusion" / "api.json"
+        self.api_defaults_path = APP_ROOT / "api.private.json"
+        if not self.api_defaults_path.exists():
+            self.api_defaults_path = APP_ROOT / "api.defaults.json"
+        self.api_config = load_api_client_config(self.api_config_path, self.api_defaults_path)
+        self.client = DocFusionApiClient(self.api_config.base_url, token=self.api_config.token)
+        self.server_task_defaults_path = APP_ROOT / "server_task.private.json"
+        if not self.server_task_defaults_path.exists():
+            self.server_task_defaults_path = APP_ROOT / "server_task.defaults.json"
         self.server_task_config_path = Path.home() / ".docfusion" / "server-task.json"
         self.server_task_config = load_server_task_config(self.server_task_config_path, self.server_task_defaults_path)
         self.api_process: subprocess.Popen | None = None
@@ -189,6 +213,7 @@ class DocFusionWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self._workspace_page())
         self.stack.addWidget(self._document_page())
+        self.stack.addWidget(self._generation_page())
         self.stack.addWidget(self._fusion_page())
         self.stack.addWidget(self._articles_page())
         self.stack.addWidget(self._settings_page())
@@ -227,7 +252,7 @@ class DocFusionWindow(QMainWindow):
         divider.setStyleSheet(f"background: {CARD};")
         layout.addWidget(divider)
 
-        for index, label in enumerate(["工作台", "文档库", "融合流程", "文章库", "系统设置"]):
+        for index, label in enumerate(["工作台", "文档库", "生成文档", "融合流程", "文章库", "系统设置"]):
             btn = NavButton(label)
             btn.clicked.connect(lambda checked=False, i=index: self._activate_nav(i))
             self.nav_buttons.append(btn)
@@ -358,15 +383,23 @@ class DocFusionWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("paperPanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(20, 18, 20, 20)
-        layout.setSpacing(12)
-        layout.addWidget(self._panel_heading("最近文章", ""))
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(10)
+        header = QHBoxLayout()
+        header.addWidget(self._panel_heading("最近文章", ""))
+        header.addStretch()
+        self.recent_articles_count = Tag("0 篇", PRIMARY_SOFT, PRIMARY)
+        self.recent_articles_count.setFixedSize(58, 32)
+        self.recent_articles_count.setAlignment(Qt.AlignCenter)
+        self.recent_articles_count.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        header.addWidget(self.recent_articles_count)
+        layout.addLayout(header)
         self.recent_articles_list = QVBoxLayout()
-        self.recent_articles_list.setSpacing(8)
+        self.recent_articles_list.setSpacing(10)
         layout.addLayout(self.recent_articles_list)
         btn = QPushButton("打开文章库")
         btn.setObjectName("secondary")
-        btn.clicked.connect(lambda: self._activate_nav(3))
+        btn.clicked.connect(lambda: self._activate_nav(4))
         layout.addWidget(btn, 0, Qt.AlignLeft)
         return panel
 
@@ -386,28 +419,42 @@ class DocFusionWindow(QMainWindow):
         for code, name, desc, progress, color in steps:
             row = QFrame()
             row.setObjectName("softPanel")
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(14, 12, 14, 12)
+            row.setMinimumHeight(92)
+            row.setStyleSheet(
+                f"QFrame#softPanel {{ background: {SECTION}; border: 1px solid {BORDER}; border-radius: 8px; }}"
+            )
+            row_layout = QGridLayout(row)
+            row_layout.setContentsMargins(14, 12, 18, 12)
+            row_layout.setHorizontalSpacing(12)
+            row_layout.setVerticalSpacing(8)
             code_label = QLabel(code)
-            code_label.setFixedWidth(38)
+            code_label.setFixedSize(46, 54)
             code_label.setAlignment(Qt.AlignCenter)
             code_label.setStyleSheet(
                 f"background: {color}; color: white; border-radius: 6px; "
                 "font-size: 13px; font-weight: 700; padding: 7px 0;"
             )
-            row_layout.addWidget(code_label)
+            row_layout.addWidget(code_label, 0, 0, 2, 1)
             text = QVBoxLayout()
+            text.setContentsMargins(0, 0, 0, 0)
+            text.setSpacing(5)
             title = QLabel(name)
             title.setObjectName("panelTitle")
             text.addWidget(title)
             sub = QLabel(desc)
             sub.setObjectName("muted")
             text.addWidget(sub)
-            row_layout.addLayout(text, 1)
+            row_layout.addLayout(text, 0, 1, 2, 1)
+            percent = QLabel(f"{progress}%")
+            percent.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            percent.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: 750;")
+            row_layout.addWidget(percent, 0, 2)
             bar = QProgressBar()
-            bar.setFixedWidth(150)
+            bar.setFixedWidth(170)
+            bar.setFixedHeight(8)
             bar.setValue(progress)
-            row_layout.addWidget(bar)
+            row_layout.addWidget(bar, 1, 2)
+            row_layout.setColumnStretch(1, 1)
             layout.addWidget(row)
         return panel
 
@@ -637,6 +684,11 @@ class DocFusionWindow(QMainWindow):
         run_actions.addStretch()
         task_layout.addLayout(run_actions)
 
+        self.server_task_status_banner = QLabel("尚未提交任务")
+        self.server_task_status_banner.setWordWrap(True)
+        self._set_server_task_status_banner("idle")
+        task_layout.addWidget(self.server_task_status_banner)
+
         self.server_task_status_view = QPlainTextEdit()
         self.server_task_status_view.setReadOnly(True)
         self.server_task_status_view.setMinimumHeight(150)
@@ -648,11 +700,101 @@ class DocFusionWindow(QMainWindow):
         )
         task_layout.addWidget(self.server_task_status_view)
         detail_layout.addWidget(task_panel)
+
         detail_layout.addStretch()
 
         splitter.addWidget(table_panel)
         splitter.addWidget(detail_panel)
         splitter.setSizes([760, 360])
+        layout.addWidget(splitter)
+        return page
+
+    def _generation_page(self) -> QWidget:
+        page, layout = self._page_shell()
+        layout.addWidget(self._header("生成文档", ""))
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        work_panel = QFrame()
+        work_panel.setObjectName("paperPanel")
+        work_layout = QVBoxLayout(work_panel)
+        work_layout.setContentsMargins(20, 18, 20, 20)
+        work_layout.setSpacing(14)
+        work_layout.addWidget(self._panel_heading("自然语言生成", ""))
+
+        self.generation_instruction = QPlainTextEdit()
+        self.generation_instruction.setMinimumHeight(150)
+        self.generation_instruction.setPlaceholderText(
+            "例如：生成一份校园采购验收报告，包含项目名称、供应商、金额、验收结论，输出 Word 文档"
+        )
+        work_layout.addWidget(self.generation_instruction)
+
+        format_row = QHBoxLayout()
+        format_row.addWidget(QLabel("输出格式"))
+        self.generation_format = QComboBox()
+        self.generation_format.addItem("Word (.docx)", "docx")
+        self.generation_format.addItem("PDF (.pdf)", "pdf")
+        self.generation_format.addItem("Markdown (.md)", "md")
+        self.generation_format.addItem("文本 (.txt)", "txt")
+        self.generation_format.setMinimumHeight(40)
+        self.generation_format.currentIndexChanged.connect(self._on_generation_format_changed)
+        format_row.addWidget(self.generation_format, 1)
+        format_row.addStretch()
+        work_layout.addLayout(format_row)
+
+        generation_actions = QHBoxLayout()
+        generate = QPushButton("生成文档")
+        generate.clicked.connect(self.submit_generation_task)
+        generation_actions.addWidget(generate)
+        refresh_generation = QPushButton("刷新进程")
+        refresh_generation.setObjectName("secondary")
+        refresh_generation.clicked.connect(self.refresh_generation_task_status)
+        generation_actions.addWidget(refresh_generation)
+        generation_actions.addStretch()
+        work_layout.addLayout(generation_actions)
+
+        self.generation_status_view = QPlainTextEdit()
+        self.generation_status_view.setReadOnly(True)
+        self.generation_status_view.setMinimumHeight(320)
+        self.generation_status_view.setPlainText("等待生成文档任务...")
+        self.generation_status_view.setStyleSheet(
+            f"background: {INVERSE_ELEVATED}; color: {INVERSE_TEXT}; "
+            "border: 1px solid rgba(250,249,245,0.14); border-radius: 8px; "
+            "font-family: Consolas; font-size: 13px; padding: 12px;"
+        )
+        work_layout.addWidget(self.generation_status_view, 1)
+
+        preview_panel = QFrame()
+        preview_panel.setObjectName("paperPanel")
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(20, 18, 20, 20)
+        preview_layout.setSpacing(14)
+        preview_layout.addWidget(self._panel_heading("生成结果预览", ""))
+
+        self.generation_preview_label = QLabel("生成完成后会自动加载文档正文，可在这里修改后再下载。")
+        self.generation_preview_label.setObjectName("muted")
+        self.generation_preview_label.setWordWrap(True)
+        preview_layout.addWidget(self.generation_preview_label)
+
+        self.generation_preview_editor = QPlainTextEdit()
+        self.generation_preview_editor.setMinimumHeight(420)
+        self.generation_preview_editor.setPlaceholderText("生成后的文档正文会显示在这里。")
+        preview_layout.addWidget(self.generation_preview_editor, 1)
+
+        preview_actions = QHBoxLayout()
+        save_preview = QPushButton("保存修改")
+        save_preview.clicked.connect(self.save_generation_preview)
+        preview_actions.addWidget(save_preview)
+        self.generation_download_button = QPushButton("下载 Word")
+        self.generation_download_button.setObjectName("secondary")
+        self.generation_download_button.clicked.connect(self.download_generation_result)
+        preview_actions.addWidget(self.generation_download_button)
+        preview_actions.addStretch()
+        preview_layout.addLayout(preview_actions)
+
+        splitter.addWidget(work_panel)
+        splitter.addWidget(preview_panel)
+        splitter.setSizes([520, 620])
         layout.addWidget(splitter)
         return page
 
@@ -921,18 +1063,22 @@ class DocFusionWindow(QMainWindow):
 
         service_panel = QFrame()
         service_panel.setObjectName("paperPanel")
+        service_panel.setMaximumHeight(300)
+        service_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         service_layout = QVBoxLayout(service_panel)
         service_layout.setContentsMargins(22, 20, 22, 22)
         service_layout.setSpacing(14)
-        service_layout.addWidget(self._panel_heading("后端服务", ""))
+        service_layout.addWidget(self._panel_heading("本地开发后端", ""))
 
         status_box = QFrame()
         status_box.setObjectName("softPanel")
         status_layout = QVBoxLayout(status_box)
         status_layout.setContentsMargins(16, 14, 16, 14)
         status_layout.setSpacing(8)
-        status_layout.addWidget(Tag("本机连接", TEAL_SOFT, TEAL))
-        self.settings_status_text = QLabel("尚未检测。点击检测连接或启动后端服务。")
+        service_tag = Tag("高级 / 本地调试", AMBER_SOFT, AMBER)
+        service_tag.setFixedHeight(28)
+        status_layout.addWidget(service_tag)
+        self.settings_status_text = QLabel("通常不需要启动本地后端；桌面端默认连接 VPS 主服务。")
         self.settings_status_text.setObjectName("muted")
         self.settings_status_text.setWordWrap(True)
         status_layout.addWidget(self.settings_status_text)
@@ -940,6 +1086,7 @@ class DocFusionWindow(QMainWindow):
 
         service_buttons = QHBoxLayout()
         start_backend = QPushButton("启动后端服务")
+        start_backend.setObjectName("secondary")
         start_backend.clicked.connect(self.start_backend_service)
         service_buttons.addWidget(start_backend)
         check_backend = QPushButton("检测连接")
@@ -958,11 +1105,17 @@ class DocFusionWindow(QMainWindow):
         api_layout = QVBoxLayout(api_panel)
         api_layout.setContentsMargins(22, 20, 22, 22)
         api_layout.setSpacing(14)
-        api_layout.addWidget(self._panel_heading("DocFusion 后端 API", ""))
+        api_layout.addWidget(self._panel_heading("主后端 API", "文档库、实体抽取、融合报告、文章库使用这个地址。"))
 
         self.base_url_input = QLineEdit(self.client.base_url)
         api_layout.addWidget(QLabel("API 地址"))
         api_layout.addWidget(self.base_url_input)
+        self.api_token_input = QLineEdit()
+        self.api_token_input.setText(self.api_config.token)
+        self.api_token_input.setEchoMode(QLineEdit.Password)
+        self.api_token_input.setPlaceholderText("Bearer token，留空则读取环境变量或本地后端 token 文件")
+        api_layout.addWidget(QLabel("API Token"))
+        api_layout.addWidget(self.api_token_input)
 
         api_actions = QHBoxLayout()
         save = QPushButton("应用地址")
@@ -982,24 +1135,65 @@ class DocFusionWindow(QMainWindow):
         token_layout.setContentsMargins(16, 14, 16, 14)
         token_layout.setSpacing(8)
         token_layout.addWidget(Tag("凭据来源", PRIMARY_SOFT, PRIMARY))
-        token_label = QLabel(f"DOCFUSION_API_TOKEN 环境变量，或主项目 token 文件：\n{token_path}")
+        token_label = QLabel(
+            f"优先使用上方填写的 token；也可使用 DOCFUSION_API_TOKEN 环境变量，"
+            f"或本地后端 token 文件：\n{token_path}\n用户配置保存到：{self.api_config_path}"
+        )
         token_label.setObjectName("muted")
         token_label.setWordWrap(True)
         token_layout.addWidget(token_label)
         api_layout.addWidget(token_box)
 
-        overview.addWidget(service_panel, 0, 0)
+        overview.addWidget(service_panel, 0, 0, Qt.AlignTop)
         overview.addWidget(api_panel, 0, 1)
         overview.setColumnStretch(0, 1)
         overview.setColumnStretch(1, 1)
         layout.addLayout(overview)
+
+        toolkit_panel = QFrame()
+        toolkit_panel.setObjectName("paperPanel")
+        toolkit_layout = QVBoxLayout(toolkit_panel)
+        toolkit_layout.setContentsMargins(22, 18, 22, 20)
+        toolkit_layout.setSpacing(12)
+        toolkit_layout.addWidget(self._panel_heading("服务器任务 API", "自然语言任务、OCR、文档生成会通过这里调用 VPS Codex CLI。"))
+
+        toolkit_grid = QGridLayout()
+        toolkit_grid.setHorizontalSpacing(12)
+        toolkit_grid.setVerticalSpacing(10)
+        self.settings_server_task_url_input = QLineEdit(self.server_task_config.base_url)
+        self.settings_server_task_token_input = QLineEdit()
+        self.settings_server_task_token_input.setText(self.server_task_config.token)
+        self.settings_server_task_token_input.setEchoMode(QLineEdit.Password)
+        self.settings_server_task_token_input.setPlaceholderText("Bearer token")
+        toolkit_grid.addWidget(QLabel("Toolkit 地址"), 0, 0)
+        toolkit_grid.addWidget(self.settings_server_task_url_input, 0, 1)
+        toolkit_grid.addWidget(QLabel("Token"), 1, 0)
+        toolkit_grid.addWidget(self.settings_server_task_token_input, 1, 1)
+        toolkit_layout.addLayout(toolkit_grid)
+
+        toolkit_hint = QLabel("这里会同步到文档库里的“自然语言任务”面板；VPS 默认地址为 https://docx.zhuoruan.xyz/toolkit。")
+        toolkit_hint.setObjectName("muted")
+        toolkit_hint.setWordWrap(True)
+        toolkit_layout.addWidget(toolkit_hint)
+
+        toolkit_actions = QHBoxLayout()
+        apply_toolkit = QPushButton("应用到任务面板")
+        apply_toolkit.clicked.connect(self.apply_server_task_settings_from_settings)
+        toolkit_actions.addWidget(apply_toolkit)
+        test_toolkit = QPushButton("检测 Toolkit")
+        test_toolkit.setObjectName("secondary")
+        test_toolkit.clicked.connect(self.check_server_task_health_from_settings)
+        toolkit_actions.addWidget(test_toolkit)
+        toolkit_actions.addStretch()
+        toolkit_layout.addLayout(toolkit_actions)
+        layout.addWidget(toolkit_panel)
 
         provider_panel = QFrame()
         provider_panel.setObjectName("paperPanel")
         provider_layout = QVBoxLayout(provider_panel)
         provider_layout.setContentsMargins(22, 18, 22, 20)
         provider_layout.setSpacing(12)
-        provider_layout.addWidget(self._panel_heading("模型 Provider API", ""))
+        provider_layout.addWidget(self._panel_heading("模型 Provider API", "仅影响本地后端的模型调用；VPS Codex CLI 使用服务器环境配置。"))
 
         provider_grid = QGridLayout()
         provider_grid.setHorizontalSpacing(16)
@@ -1232,7 +1426,7 @@ class DocFusionWindow(QMainWindow):
         maintenance_buttons.addWidget(refresh_all)
         open_articles = QPushButton("打开文章库")
         open_articles.setObjectName("secondary")
-        open_articles.clicked.connect(lambda: self._activate_nav(3))
+        open_articles.clicked.connect(lambda: self._activate_nav(4))
         maintenance_buttons.addWidget(open_articles)
         maintenance_buttons.addStretch()
         maintenance_layout.addLayout(maintenance_buttons)
@@ -1264,7 +1458,7 @@ class DocFusionWindow(QMainWindow):
         self._run_api("加载文章", self.client.articles, self._on_articles)
 
     def load_cross_document_entities(self) -> None:
-        self._run_api("加载跨文档关联", cross_document_entities, self._on_fusion_rows)
+        self._run_api("加载跨文档关联", self.client.cross_document_entities, self._on_fusion_rows)
 
     def upload_document(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1402,8 +1596,27 @@ class DocFusionWindow(QMainWindow):
         )
         save_server_task_config(config, self.server_task_config_path)
         self.server_task_config = config
+        if hasattr(self, "settings_server_task_url_input"):
+            self.settings_server_task_url_input.setText(config.base_url)
+            self.settings_server_task_token_input.setText(config.token)
         self.server_task_connection_label.setText(f"服务器任务配置已保存：{self.server_task_config_path}")
         self.log(f"服务器任务配置已保存：{self.server_task_config_path}")
+
+    def apply_server_task_settings_from_settings(self) -> None:
+        config = ServerTaskConfig(
+            base_url=self.settings_server_task_url_input.text().strip(),
+            token=self.settings_server_task_token_input.text().strip(),
+        )
+        self.server_task_url_input.setText(config.base_url)
+        self.server_task_token_input.setText(config.token)
+        save_server_task_config(config, self.server_task_config_path)
+        self.server_task_config = config
+        self.server_task_connection_label.setText(f"服务器任务配置已保存：{self.server_task_config_path}")
+        self.log(f"服务器任务配置已从设置页同步：{config.base_url}")
+
+    def check_server_task_health_from_settings(self) -> None:
+        self.apply_server_task_settings_from_settings()
+        self.check_server_task_health()
 
     def check_server_task_tools(self) -> None:
         self._run_api("检查服务器工具", self._server_task_client().tools, self._on_server_task_tools)
@@ -1438,10 +1651,32 @@ class DocFusionWindow(QMainWindow):
         if not task_files:
             QMessageBox.information(self, "缺少文件", "请先在文档库选择文档，或选择临时文件。")
             return
+        self._set_server_task_status_banner("running", "正在提交服务器任务...")
         self._run_api(
             "提交服务器任务",
             lambda: self._server_task_client().submit_instruction(instruction, task_files),
             self._on_server_task_submitted,
+        )
+
+    def submit_generation_task(self) -> None:
+        instruction = self.generation_instruction.toPlainText().strip()
+        if not instruction:
+            QMessageBox.information(self, "缺少生成需求", "请先输入要生成的文档内容和格式要求。")
+            return
+        self.generation_preview_task_id = None
+        self.generated_document_path = None
+        self.edited_generation_path = None
+        self.generation_preview_download_pending = False
+        self.generation_preview_editor.clear()
+        self.generation_preview_label.setText("任务已提交，生成完成后会自动加载文档正文。")
+        self.generation_status_view.setPlainText("提交生成任务...")
+        self._run_api(
+            "提交生成文档任务",
+            lambda: self._server_task_client().submit_generation(
+                instruction,
+                output_format=self._selected_generation_format(),
+            ),
+            self._on_generation_task_submitted,
         )
 
     def refresh_server_task_status(self) -> None:
@@ -1452,6 +1687,20 @@ class DocFusionWindow(QMainWindow):
             "刷新服务器任务",
             lambda: self._server_task_client().task_status(self.latest_server_task_id),
             self._on_server_task_status,
+        )
+
+    def refresh_generation_task_status(self) -> None:
+        if not self.latest_generation_task_id:
+            QMessageBox.information(self, "缺少任务", "还没有可查询的生成文档任务。")
+            return
+        client = self._server_task_client()
+        self._run_api(
+            "刷新生成文档任务",
+            lambda: {
+                "status": client.task_status(self.latest_generation_task_id),
+                "logs": client.task_logs(self.latest_generation_task_id),
+            },
+            self._on_generation_task_snapshot,
         )
 
     def download_server_task_result(self) -> None:
@@ -1465,6 +1714,51 @@ class DocFusionWindow(QMainWindow):
             "下载服务器任务结果",
             lambda: self._server_task_client().download_result(self.latest_server_task_id, directory),
             lambda path: self._on_server_task_downloaded(Path(path)),
+        )
+
+    def download_generation_result(self) -> None:
+        if not self.latest_generation_task_id:
+            QMessageBox.information(self, "缺少任务", "还没有可下载的生成文档任务。")
+            return
+        default_name = "generated.docx"
+        source = self.edited_generation_path or self.generated_document_path
+        if source:
+            default_name = source.name
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存生成文档",
+            str(Path.home() / default_name),
+            self._generation_file_filter(source),
+        )
+        if not target:
+            return
+        target_path = Path(target)
+        if not target_path.suffix:
+            target_path = target_path.with_suffix(self._generation_download_suffix(source))
+        if source and source.exists():
+            self._run_api(
+                "保存生成文档",
+                lambda: self._copy_generation_result(source, target_path),
+                lambda path: self._on_generation_task_downloaded(Path(path)),
+            )
+            return
+        self._run_api(
+            "下载生成文档结果",
+            lambda: self._server_task_client().download_result(self.latest_generation_task_id, target_path),
+            lambda path: self._on_generation_task_downloaded(Path(path)),
+        )
+
+    def save_generation_preview(self) -> None:
+        text = self.generation_preview_editor.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, "没有内容", "当前没有可保存的生成文档正文。")
+            return
+        task_id = self.latest_generation_task_id or "manual"
+        target = self._generation_cache_dir(task_id) / self._edited_generation_filename()
+        self._run_api(
+            "保存生成文档修改",
+            lambda: self._write_generation_preview(target, text),
+            lambda path: self._on_generation_preview_saved(Path(path)),
         )
 
     def load_selected_article_detail(self) -> None:
@@ -1504,7 +1798,7 @@ class DocFusionWindow(QMainWindow):
             return
         self._run_api(
             "入库爬取文章",
-            lambda: store_crawled_articles(articles),
+            lambda: self.client.store_articles(articles),
             lambda data: self._after_store_crawled(data),
         )
 
@@ -1515,7 +1809,7 @@ class DocFusionWindow(QMainWindow):
             return
         self._run_api(
             "生成测试文档",
-            lambda: generate_crawled_documents(articles),
+            lambda: self.client.generate_article_documents(articles),
             self._after_generate_crawled_documents,
         )
 
@@ -1532,17 +1826,25 @@ class DocFusionWindow(QMainWindow):
         if path:
             self._run_api(
                 "导出融合报告",
-                lambda: export_fusion_report(path, self.fusion_rows),
+                lambda: self.client.export_fusion_report(path, self.fusion_rows),
                 lambda target: self.log(f"融合报告已导出：{target}"),
             )
 
     def apply_api_url(self) -> None:
-        self.client.base_url = self.base_url_input.text().strip().rstrip("/")
-        self.log(f"API 地址已切换为 {self.client.base_url}")
+        config = ApiClientConfig(
+            base_url=self.base_url_input.text().strip().rstrip("/"),
+            token=self.api_token_input.text().strip(),
+        )
+        save_api_client_config(config, self.api_config_path)
+        self.api_config = config
+        self.client.base_url = config.base_url
+        self.client.token = config.token
+        self.log(f"API 配置已保存：{self.api_config_path}")
         self.refresh_all()
 
     def reset_api_url(self) -> None:
         self.base_url_input.setText("https://docx.zhuoruan.xyz/api")
+        self.api_token_input.clear()
         self.apply_api_url()
 
     def load_provider_settings(self) -> None:
@@ -1933,17 +2235,60 @@ class DocFusionWindow(QMainWindow):
         if not hasattr(self, "recent_articles_list"):
             return
         self._clear_layout(self.recent_articles_list)
+        if hasattr(self, "recent_articles_count"):
+            self.recent_articles_count.setText(f"{len(self.articles)} 篇")
         if not self.articles:
             self.recent_articles_list.addWidget(self._empty_label("暂无文章，可在文章库启动爬虫获取。"))
             return
-        for article in self.articles[:5]:
-            self.recent_articles_list.addWidget(
-                self._summary_row(
-                    article.get("title", "未命名文章"),
-                    f"{article.get('source') or '-'} · {article.get('category') or '-'}",
-                    BLUE,
-                )
-            )
+        for index, article in enumerate(self.articles[:4], start=1):
+            self.recent_articles_list.addWidget(self._article_summary_row(article, index))
+
+    def _article_summary_row(self, article: dict[str, Any], index: int) -> QFrame:
+        row = QFrame()
+        row.setObjectName("softPanel")
+        row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        row.setMinimumHeight(82)
+        row.setMaximumHeight(96)
+        row.setStyleSheet(
+            f"QFrame#softPanel {{ background: {ELEVATED}; border: 1px solid rgba(31,34,31,0.10); border-radius: 8px; }}"
+        )
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(12)
+
+        badge = QLabel(f"{index:02d}")
+        badge.setFixedSize(34, 34)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet(
+            f"background: {BLUE}; color: white; border-radius: 7px; font-size: 13px; font-weight: 800;"
+        )
+        layout.addWidget(badge, 0, Qt.AlignTop)
+
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(6)
+        title_label = QLabel(str(article.get("title") or "未命名文章"))
+        title_label.setWordWrap(True)
+        title_label.setMaximumHeight(44)
+        title_label.setStyleSheet(f"color: {INK}; font-size: 15px; font-weight: 750;")
+        text.addWidget(title_label)
+
+        meta = QLabel(self._article_meta(article))
+        meta.setWordWrap(True)
+        meta.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        text.addWidget(meta)
+        layout.addLayout(text, 1)
+        return row
+
+    def _article_meta(self, article: dict[str, Any]) -> str:
+        parts = [
+            str(article.get("source") or "未知来源"),
+            str(article.get("category") or "未分类"),
+        ]
+        date = article.get("publish_date") or article.get("crawled_at") or ""
+        if date:
+            parts.append(str(date)[:10])
+        return " · ".join(parts)
 
     def _summary_row(self, title: str, subtitle: str, marker_color: str) -> QFrame:
         row = QFrame()
@@ -2018,15 +2363,52 @@ class DocFusionWindow(QMainWindow):
         self.server_task_poll_count = 0
         self._on_server_task_status(data)
 
+    def _on_generation_task_submitted(self, data: dict[str, Any]) -> None:
+        self.latest_generation_task_id = str(data.get("task_id") or "")
+        self.generation_task_poll_count = 0
+        self._on_generation_task_snapshot({"status": data, "logs": {"events": []}})
+
     def _on_server_task_status(self, data: dict[str, Any]) -> None:
         self.latest_server_task_id = str(data.get("task_id") or self.latest_server_task_id or "")
         self.server_task_status_view.setPlainText(self._pretty(data))
         status = data.get("status")
+        self._set_server_task_status_banner(str(status or "unknown"), self._server_task_status_message(data))
         self.log(f"服务器任务 {self.latest_server_task_id or '-'}：{status}")
         if status in {"queued", "running"}:
             self._schedule_server_task_poll()
         else:
             self.server_task_poll_count = 0
+
+    def _on_generation_task_snapshot(self, data: dict[str, Any]) -> None:
+        status_payload = data.get("status") if isinstance(data.get("status"), dict) else data
+        logs_payload = data.get("logs") if isinstance(data.get("logs"), dict) else {}
+        self.latest_generation_task_id = str(status_payload.get("task_id") or self.latest_generation_task_id or "")
+        status = status_payload.get("status")
+        lines = [
+            f"任务：{self.latest_generation_task_id or '-'}",
+            f"状态：{status or '-'}",
+            f"进度：{status_payload.get('progress', {})}",
+            f"输出文件：{status_payload.get('output_files', [])}",
+            "",
+            "过程输出：",
+        ]
+        events = logs_payload.get("events") or []
+        for event in events:
+            if event.get("event") == "agent_output":
+                line = str(event.get("line") or "")
+                if line:
+                    lines.append(line)
+            elif event.get("event") in {"step_started", "step_completed", "complete", "error"}:
+                lines.append(self._pretty(event))
+        self.generation_status_view.setPlainText("\n".join(lines))
+        self.generation_status_view.verticalScrollBar().setValue(self.generation_status_view.verticalScrollBar().maximum())
+        self.log(f"生成文档任务 {self.latest_generation_task_id or '-'}：{status}")
+        if status in {"queued", "running"}:
+            self._schedule_generation_task_poll()
+        else:
+            self.generation_task_poll_count = 0
+            if status == "completed":
+                self._download_generation_preview_once()
 
     def _schedule_server_task_poll(self) -> None:
         if not self.latest_server_task_id:
@@ -2039,9 +2421,48 @@ class DocFusionWindow(QMainWindow):
             return
         QTimer.singleShot(1500, self.refresh_server_task_status)
 
+    def _schedule_generation_task_poll(self) -> None:
+        if not self.latest_generation_task_id:
+            return
+        self.generation_task_poll_count += 1
+        if self.generation_task_poll_count > self.server_task_max_polls:
+            message = f"生成文档任务 {self.latest_generation_task_id} 轮询已停止：超过 {self.server_task_max_polls} 次仍未完成。"
+            self.generation_status_view.appendPlainText(f"\n{message}")
+            self.log(message)
+            return
+        QTimer.singleShot(1500, self.refresh_generation_task_status)
+
     def _on_server_task_downloaded(self, path: Path) -> None:
         self.server_task_status_view.appendPlainText(f"\nDownloaded: {path}")
         self.log(f"服务器任务结果已下载：{path}")
+
+    def _on_generation_task_downloaded(self, path: Path) -> None:
+        self.generation_status_view.appendPlainText(f"\nDownloaded: {path}")
+        self.log(f"生成文档结果已下载：{path}")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _on_generation_preview_downloaded(self, path: Path) -> None:
+        self.generated_document_path = path
+        self.generation_preview_task_id = self.latest_generation_task_id
+        self.generation_preview_download_pending = False
+        self.edited_generation_path = None
+        try:
+            preview = self._read_generation_preview(path)
+        except Exception as exc:
+            self.generation_preview_label.setText(f"生成结果已下载，但预览失败：{exc}")
+            self.generation_status_view.appendPlainText(f"\nPreview failed: {exc}")
+            self.log(f"生成文档预览失败：{exc}")
+            return
+        self.generation_preview_editor.setPlainText(preview)
+        self.generation_preview_label.setText(f"已加载生成结果：{path}")
+        self.generation_status_view.appendPlainText(f"\nPreview loaded: {path}")
+        self.log(f"生成文档预览已加载：{path}")
+
+    def _on_generation_preview_saved(self, path: Path) -> None:
+        self.edited_generation_path = path
+        self.generation_preview_label.setText(f"修改已保存：{path}")
+        self.generation_status_view.appendPlainText(f"\nEdited document saved: {path}")
+        self.log(f"生成文档修改已保存：{path}")
 
     def _on_document_downloaded(self, path: Path) -> None:
         self.log(f"文档已下载：{path}")
@@ -2088,8 +2509,158 @@ class DocFusionWindow(QMainWindow):
                 path = Path(str(raw_path))
                 if path.is_file():
                     return [path]
-                self.log(f"选中文档文件不存在，改用临时文件：{path}")
+                self.log(f"选中文档是远端路径，先下载到本地临时文件：{path}")
+                temp_dir = Path(tempfile.gettempdir()) / "docfusion_server_tasks"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                local_name = Path(str(selected_doc.get("filename") or path.name or f"document-{selected_doc['id']}")).name
+                local_path = self.client.download_document(int(selected_doc["id"]), temp_dir / local_name)
+                return [local_path]
         return list(self.server_task_files)
+
+    def _server_task_status_message(self, data: dict[str, Any]) -> str:
+        status = str(data.get("status") or "unknown")
+        task_id = str(data.get("task_id") or self.latest_server_task_id or "-")
+        outputs = data.get("output_files") or []
+        if status == "completed":
+            suffix = f" 输出：{', '.join(map(str, outputs))}" if outputs else ""
+            return f"任务已完成，可下载结果。任务：{task_id}{suffix}"
+        if status == "failed":
+            return f"任务失败：{data.get('error') or '请查看日志'}"
+        if status == "timeout":
+            return f"任务超时：{task_id}"
+        if status == "queued":
+            return f"任务已排队，等待执行。任务：{task_id}"
+        if status == "running":
+            progress = data.get("progress") if isinstance(data.get("progress"), dict) else {}
+            description = progress.get("description") or "running"
+            return f"任务正在运行：{description}。任务：{task_id}"
+        return f"任务状态：{status}。任务：{task_id}"
+
+    def _set_server_task_status_banner(self, status: str, message: str | None = None) -> None:
+        if not hasattr(self, "server_task_status_banner"):
+            return
+        normalized = status.lower()
+        palette = {
+            "completed": (TEAL_SOFT, TEAL),
+            "running": (AMBER_SOFT, AMBER),
+            "queued": (AMBER_SOFT, AMBER),
+            "failed": ("#fde8e8", RED),
+            "timeout": ("#fde8e8", RED),
+            "idle": (PRIMARY_SOFT, PRIMARY),
+        }
+        bg, fg = palette.get(normalized, (PRIMARY_SOFT, PRIMARY))
+        text = message or {
+            "completed": "任务已完成，可下载结果。",
+            "running": "任务正在运行...",
+            "queued": "任务已排队...",
+            "failed": "任务失败，请查看日志。",
+            "timeout": "任务超时，请查看日志。",
+            "idle": "尚未提交任务",
+        }.get(normalized, f"任务状态：{status}")
+        self.server_task_status_banner.setText(text)
+        self.server_task_status_banner.setStyleSheet(
+            f"background: {bg}; color: {fg}; border: 1px solid {fg}; border-radius: 8px; "
+            "padding: 10px 12px; font-size: 14px; font-weight: 700;"
+        )
+
+    def _download_generation_preview_once(self) -> None:
+        task_id = self.latest_generation_task_id
+        if not task_id or self.generation_preview_download_pending or self.generation_preview_task_id == task_id:
+            return
+        self.generation_preview_download_pending = True
+        target_dir = self._generation_cache_dir(task_id)
+        self._run_api(
+            "加载生成文档预览",
+            lambda: self._server_task_client().download_result(task_id, target_dir),
+            lambda path: self._on_generation_preview_downloaded(Path(path)),
+        )
+
+    def _selected_generation_format(self) -> str:
+        if not hasattr(self, "generation_format"):
+            return "docx"
+        return str(self.generation_format.currentData() or "docx")
+
+    def _on_generation_format_changed(self) -> None:
+        if hasattr(self, "generation_download_button"):
+            labels = {"docx": "下载 Word", "pdf": "下载 PDF", "md": "下载 Markdown", "txt": "下载 TXT"}
+            self.generation_download_button.setText(labels.get(self._selected_generation_format(), "下载结果"))
+
+    def _generation_download_suffix(self, source: Path | None = None) -> str:
+        if source and source.suffix:
+            return source.suffix
+        return {"docx": ".docx", "pdf": ".pdf", "md": ".md", "txt": ".txt"}.get(self._selected_generation_format(), ".docx")
+
+    def _generation_file_filter(self, source: Path | None = None) -> str:
+        suffix = self._generation_download_suffix(source).lower()
+        return {
+            ".docx": "Word 文档 (*.docx);;All files (*.*)",
+            ".pdf": "PDF 文档 (*.pdf);;All files (*.*)",
+            ".md": "Markdown (*.md);;All files (*.*)",
+            ".txt": "文本文件 (*.txt);;All files (*.*)",
+        }.get(suffix, "All files (*.*)")
+
+    def _edited_generation_filename(self) -> str:
+        suffix = self._generation_download_suffix(self.generated_document_path).lower()
+        if suffix == ".pdf":
+            return "generated_edited.docx"
+        return f"generated_edited{suffix}"
+
+    def _generation_cache_dir(self, task_id: str) -> Path:
+        target = Path(tempfile.gettempdir()) / "docfusion_generated" / task_id
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def _read_generation_preview(self, path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".docx":
+            from docx import Document
+
+            document = Document(str(path))
+            lines: list[str] = []
+            for paragraph in document.paragraphs:
+                lines.append(paragraph.text)
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if any(cells):
+                        lines.append(" | ".join(cells))
+            return "\n".join(lines).strip()
+        if suffix == ".pdf":
+            try:
+                import fitz
+            except ImportError:
+                return "PDF 已生成。当前环境缺少 PyMuPDF，无法抽取预览文本；可直接下载 PDF。"
+            lines = []
+            with fitz.open(str(path)) as document:
+                for page in document:
+                    text = page.get_text("text").strip()
+                    if text:
+                        lines.append(text)
+            return "\n\n".join(lines).strip()
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    def _write_generation_preview(self, target: Path, text: str) -> Path:
+        suffix = target.suffix.lower()
+        if suffix in {".md", ".txt"}:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+            return target
+        return self._write_generation_preview_docx(target, text)
+
+    def _write_generation_preview_docx(self, target: Path, text: str) -> Path:
+        from docx import Document
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        document = Document()
+        for block in text.splitlines():
+            document.add_paragraph(block)
+        document.save(str(target))
+        return target
+
+    def _copy_generation_result(self, source: Path, target: Path) -> Path:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return target
 
     def _on_api_error(self, action: str, message: str) -> None:
         self.api_status_tag.setText("后端未就绪")

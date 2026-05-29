@@ -8,15 +8,15 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-AGENT_SYSTEM_PROMPT = """You are the DocFusion document processing agent working inside /workspace.
+AGENT_SYSTEM_PROMPT_TEMPLATE = """You are the DocFusion document processing agent working inside {workspace}.
 
 ## Environment
-- Input files: /workspace/input/ (read-only)
-- Working directory: /workspace/work/ (for intermediate files)
-- Output directory: /workspace/output/ (MUST write final files here)
-- Task definition: /workspace/task.json
+- Input files: {workspace}/input/ (read-only)
+- Working directory: {workspace}/work/ (for intermediate files)
+- Output directory: {workspace}/output/ (MUST write final files here)
+- Task definition: {workspace}/task.json
 
 ## Available Tools
 Run `docfusion <command>` for deterministic operations:
@@ -41,13 +41,17 @@ Run `docfusion <command>` for deterministic operations:
 
 ## Rules
 1. Read input files before acting.
-2. Write ALL output to /workspace/output/.
+2. Write ALL output to {workspace}/output/.
 3. Use docfusion commands for simple operations, Python for complex ones.
-4. Do NOT install software or access paths outside /workspace.
+4. Do NOT install software or access paths outside {workspace}.
 5. When setting Chinese fonts (宋体, 黑体, SimSun, SimHei) in python-docx,
    set both run.font.name AND the east-asia font attribute.
 6. Print a summary of what was generated/modified when done.
 """
+
+
+def _agent_system_prompt(workspace: str = "/workspace") -> str:
+    return AGENT_SYSTEM_PROMPT_TEMPLATE.format(workspace=workspace)
 
 
 def validate_l3_plan(plan: dict) -> None:
@@ -58,9 +62,9 @@ def validate_l3_plan(plan: dict) -> None:
         raise ValueError("L3 plan must set requires_agent=true")
 
 
-def build_agent_prompt(user_task: str) -> str:
+def build_agent_prompt(user_task: str, workspace: str = "/workspace") -> str:
     """Build a constrained system prompt for Codex CLI agent execution."""
-    return AGENT_SYSTEM_PROMPT + f"\n\n## Task\n{user_task}"
+    return _agent_system_prompt(workspace) + f"\n\n## Task\n{user_task}"
 
 
 def build_agent_prompt_from_plan(plan: dict) -> str:
@@ -80,6 +84,7 @@ def run_codex_agent(
     *,
     timeout: int = 600,
     model: str | None = None,
+    on_output: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Execute an L3 task via Codex CLI inside a workspace.
 
@@ -93,7 +98,7 @@ def run_codex_agent(
     output_dir = ws / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    prompt = build_agent_prompt(user_task)
+    prompt = build_agent_prompt(user_task, str(ws))
     prompt_file = ws / "work" / "agent_prompt.txt"
     prompt_file.parent.mkdir(parents=True, exist_ok=True)
     prompt_file.write_text(prompt, encoding="utf-8")
@@ -101,16 +106,7 @@ def run_codex_agent(
     codex_cmd = _build_codex_command(ws, timeout, model)
 
     try:
-        completed = subprocess.run(
-            codex_cmd,
-            input=prompt,
-            text=True,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout + 30,
-            check=False,
-        )
+        completed = _run_codex_streaming(codex_cmd, prompt, timeout=timeout + 30, on_output=on_output)
     except subprocess.TimeoutExpired:
         return {
             "success": False,
@@ -171,15 +167,54 @@ def run_codex_agent_with_files(
     return run_codex_agent(workspace_path, user_task, timeout=timeout, model=model)
 
 
+def _run_codex_streaming(
+    command: list[str],
+    prompt: str,
+    *,
+    timeout: int,
+    on_output: Callable[[str, str], None] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    process.stdin.write(prompt)
+    process.stdin.close()
+
+    output_lines: list[str] = []
+    try:
+        for line in process.stdout:
+            output_lines.append(line)
+            if on_output:
+                on_output("stdout", line.rstrip("\n"))
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+
+    stdout = "".join(output_lines)
+    return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
+
+
 # ── helpers ───────────────────────────────────────────────────────
 
 def _build_codex_command(workspace: Path, timeout: int, model: str | None) -> list[str]:
+    sandbox = os.getenv("DOCFUSION_CODEX_SANDBOX", "danger-full-access")
     cmd = [
         "codex", "exec",
         "--ephemeral",
         "--skip-git-repo-check",
         "--ignore-rules",
-        "-s", "workspace-write",
+        "-s", sandbox,
         "-C", str(workspace),
     ]
     if model:

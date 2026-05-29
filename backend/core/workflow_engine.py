@@ -167,7 +167,7 @@ class CrossDocFusionStep(WorkflowStep):
             for item in items:
                 merged = False
                 for group in groups:
-                    if cls._same_entity_value(entity_type, item["value"], group[0]["value"]):
+                    if any(cls._same_entity_value(entity_type, item["value"], existing["value"]) for existing in group):
                         group.append(item)
                         merged = True
                         break
@@ -192,6 +192,15 @@ class CrossDocFusionStep(WorkflowStep):
     def _same_entity_value(cls, entity_type: str, a: str, b: str) -> bool:
         if entity_type in {"phone", "email", "id_number", "date", "amount"}:
             return str(a).strip().lower() == str(b).strip().lower()
+        if entity_type == "organization":
+            normalized_a = cls._normalize_organization(a)
+            normalized_b = cls._normalize_organization(b)
+            if normalized_a and normalized_b:
+                if normalized_a == normalized_b:
+                    return True
+                if normalized_a in normalized_b or normalized_b in normalized_a:
+                    return True
+                return cls._char_jaccard(normalized_a, normalized_b) >= cls.SIMILARITY_THRESHOLD
         return cls._char_jaccard(a, b) >= cls.SIMILARITY_THRESHOLD
 
     @staticmethod
@@ -203,6 +212,17 @@ class CrossDocFusionStep(WorkflowStep):
         intersection = len(set_a & set_b)
         union = len(set_a | set_b)
         return intersection / union if union else 0.0
+
+    @staticmethod
+    def _normalize_organization(value: str) -> str:
+        text = str(value or "").strip().lower()
+        for token in ("有限责任公司", "股份有限公司", "有限公司", "集团有限公司", "集团", "公司"):
+            text = text.replace(token, "")
+        for prefix in ("北京市", "北京", "上海市", "上海", "广州市", "广州", "深圳市", "深圳", "南京市", "南京"):
+            if text.startswith(prefix) and len(text) > len(prefix) + 2:
+                text = text[len(prefix):]
+                break
+        return text.strip()
 
     @staticmethod
     def _pick_best(clusters: list[dict], existing: list[dict]) -> list[dict]:

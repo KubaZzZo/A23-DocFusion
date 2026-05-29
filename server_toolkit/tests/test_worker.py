@@ -166,3 +166,53 @@ def test_execute_plan_fails_when_declared_output_is_missing(tmp_path):
 
     assert result.success is False
     assert "declared output missing" in result.error
+
+
+def test_execute_plan_logs_agent_output(monkeypatch, tmp_path):
+    import server_toolkit.worker as worker
+
+    workspace = tmp_path
+    (workspace / "input").mkdir()
+    (workspace / "work").mkdir()
+    (workspace / "output").mkdir()
+    (workspace / "logs").mkdir()
+
+    def fake_agent(workspace_path, instruction, on_output=None):
+        assert instruction == "generate report"
+        if on_output:
+            on_output("stdout", "planning document")
+            on_output("stdout", "writing output")
+        output = workspace / "output" / "generated.docx"
+        output.write_bytes(b"PK")
+        return {"success": True, "outputs": [str(output)], "stdout": "done"}
+
+    monkeypatch.setattr(worker, "run_codex_agent", fake_agent)
+    task_file = workspace / "task.json"
+    task_file.write_text(
+        json.dumps(
+            {
+                "level": "L3",
+                "requires_agent": True,
+                "inputs": [],
+                "outputs": ["output/generated.docx"],
+                "instruction": "generate report",
+                "timeout_seconds": 600,
+                "steps": [
+                    {
+                        "id": "agent",
+                        "tool": "docfusion",
+                        "command": "agent-generate",
+                        "args": {"instruction": "generate report", "inputs": [], "output": "output/generated.docx"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = execute_plan(task_file, workspace)
+
+    assert result.success is True
+    events = [json.loads(line) for line in (workspace / "logs" / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
+    agent_lines = [event["line"] for event in events if event["event"] == "agent_output"]
+    assert agent_lines == ["planning document", "writing output"]

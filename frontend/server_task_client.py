@@ -54,6 +54,87 @@ def _read_config_payload(path: str | Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _generation_instruction(instruction: str) -> str:
+    text = instruction.strip()
+    if re.search(r"\b(generate|create|write|produce)\b", text, flags=re.IGNORECASE):
+        return text
+    return f"generate document. User request: {text}"
+
+
+def _agent_instruction(instruction: str) -> str:
+    text = instruction.strip()
+    if re.search(r"\b(agent|generate|create|write|summarize|summary|ocr)\b", text, flags=re.IGNORECASE):
+        return text
+    return f"agent task. User request: {text}"
+
+
+def _agent_plan(
+    instruction: str,
+    inputs: list[str],
+    *,
+    output: str = "output/generated.docx",
+    timeout_seconds: int | None = 600,
+) -> dict[str, Any]:
+    text = _agent_instruction(instruction)
+    return {
+        "level": "L3",
+        "requires_agent": True,
+        "inputs": inputs,
+        "outputs": [output],
+        "instruction": text,
+        "timeout_seconds": timeout_seconds or 600,
+        "steps": [
+            {
+                "id": "step_1",
+                "tool": "docfusion",
+                "command": "agent-generate",
+                "args": {"instruction": text, "inputs": inputs, "output": output},
+            }
+        ],
+    }
+
+
+def _generation_plan(
+    instruction: str,
+    timeout_seconds: int | None = 600,
+    output_format: str = "docx",
+) -> dict[str, Any]:
+    text = _generation_instruction(instruction)
+    suffix = _generation_suffix(output_format)
+    format_label = {
+        ".docx": "Word DOCX",
+        ".pdf": "PDF",
+        ".md": "Markdown",
+        ".txt": "plain text TXT",
+    }.get(suffix, "Word DOCX")
+    return _agent_plan(
+        f"{text}\n\nOutput format: {format_label}. Write the final file to output/generated{suffix}.",
+        [],
+        output=f"output/generated{suffix}",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _generation_suffix(output_format: str) -> str:
+    normalized = (output_format or "docx").strip().lower().lstrip(".")
+    return {
+        "word": ".docx",
+        "docx": ".docx",
+        "pdf": ".pdf",
+        "markdown": ".md",
+        "md": ".md",
+        "txt": ".txt",
+        "text": ".txt",
+    }.get(normalized, ".docx")
+
+
+def _needs_agent_plan(instruction: str, files: list[str | Path]) -> bool:
+    if not files:
+        return False
+    text = instruction.lower()
+    return "ocr" in text or any(word in instruction for word in ["扫描", "识别文字", "小票"])
+
+
 class ServerTaskClient:
     def __init__(self, base_url: str, token: str, timeout: float = 30):
         self.base_url = base_url.rstrip("/")
@@ -81,10 +162,32 @@ class ServerTaskClient:
         priority: str = "normal",
         timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
-        fields: dict[str, str] = {"instruction": instruction, "priority": priority}
+        if _needs_agent_plan(instruction, files):
+            input_names = [f"input/{Path(file).name}" for file in files]
+            plan = _agent_plan(instruction, input_names, timeout_seconds=timeout_seconds or 600)
+            fields: dict[str, str] = {"plan": json.dumps(plan, ensure_ascii=True), "priority": priority}
+        else:
+            fields = {"instruction": instruction, "priority": priority}
         if timeout_seconds:
             fields["timeout"] = str(timeout_seconds)
         request = self._multipart_request("/api/server-tasks", fields, files)
+        return self._open_json(request, timeout=max(self.timeout, 90))
+
+    def submit_generation(
+        self,
+        instruction: str,
+        *,
+        priority: str = "normal",
+        timeout_seconds: int | None = 600,
+        output_format: str = "docx",
+    ) -> dict[str, Any]:
+        fields: dict[str, str] = {
+            "plan": json.dumps(_generation_plan(instruction, timeout_seconds, output_format), ensure_ascii=True),
+            "priority": priority,
+        }
+        if timeout_seconds:
+            fields["timeout"] = str(timeout_seconds)
+        request = self._multipart_request("/api/server-tasks", fields, [])
         return self._open_json(request, timeout=max(self.timeout, 90))
 
     def task_status(self, task_id: str) -> dict[str, Any]:
@@ -181,6 +284,16 @@ class ServerTaskClient:
 def _filename_from_disposition(value: str | None) -> str | None:
     if not value:
         return None
+    encoded_match = re.search(r"filename\*=([^;]+)", value, flags=re.IGNORECASE)
+    if encoded_match:
+        encoded = encoded_match.group(1).strip().strip('"')
+        if "''" in encoded:
+            charset, _, filename = encoded.partition("''")
+            try:
+                return urllib.parse.unquote(filename, encoding=charset or "utf-8")
+            except LookupError:
+                return urllib.parse.unquote(filename)
+        return urllib.parse.unquote(encoded)
     match = re.search(r'filename="?([^";]+)"?', value)
     return match.group(1) if match else None
 

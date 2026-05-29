@@ -23,6 +23,8 @@ coverage/
 .env
 .env.*
 !.env.example
+frontend/api.private.json
+frontend/server_task.private.json
 
 # Logs and runtime output
 backend/data/

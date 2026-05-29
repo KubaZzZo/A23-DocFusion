@@ -12,13 +12,13 @@ class PlanUnresolvedError(ValueError):
 
 def parse_instruction(instruction: str, inputs: list[str]) -> dict:
     text = instruction.lower()
-    if not inputs and not _has_any(text, ["generate", "create"]) and not _has_any(instruction, ["生成", "创建"]):
+    if not inputs and not _is_generate_request(text, instruction):
         raise PlanUnresolvedError("PLAN_UNRESOLVED: no input files")
 
+    if _is_ocr_request(text, instruction):
+        return _generate_plan(instruction, inputs)
     if _is_format_then_convert(text, instruction):
         return _format_then_convert_plan(instruction, text, inputs)
-    if _is_ocr_then_extract(text, instruction):
-        return _ocr_then_extract_plan(instruction, inputs)
     if _is_merge_then_format(text, instruction):
         return _merge_then_format_plan(instruction, inputs)
 
@@ -41,9 +41,21 @@ def parse_instruction(instruction: str, inputs: list[str]) -> dict:
 
 def _convert_plan(text: str, inputs: list[str]) -> dict:
     source = inputs[0]
-    target = "pdf" if "pdf" in text else "docx" if "word" in text or "docx" in text else "txt"
+    target = _detect_convert_target(text)
     output = f"output/{Path(source).stem}.{target}"
     return _single_step_plan("convert", source, output, {"to": target})
+
+
+def _detect_convert_target(text: str) -> str:
+    if "pdf" in text:
+        return "pdf"
+    if "markdown" in text or re.search(r"\bmd\b", text):
+        return "md"
+    if "txt" in text or "text" in text:
+        return "txt"
+    if "word" in text or "docx" in text:
+        return "docx"
+    return "txt"
 
 
 def _merge_plan(inputs: list[str]) -> dict:
@@ -69,7 +81,7 @@ def _merge_plan(inputs: list[str]) -> dict:
 def _format_then_convert_plan(instruction: str, text: str, inputs: list[str]) -> dict:
     source = inputs[0]
     stem = Path(source).stem
-    target = "pdf" if "pdf" in text else "docx"
+    target = _detect_convert_target(text)
     work_file = f"work/{stem}_formatted.docx"
     output = f"output/{stem}.{target}"
     return {
@@ -198,10 +210,8 @@ def _is_format_then_convert(text: str, instruction: str) -> bool:
     return has_format and has_convert
 
 
-def _is_ocr_then_extract(text: str, instruction: str) -> bool:
-    has_ocr = _has_any(text, ["ocr"]) or _has_any(instruction, ["OCR", "扫描", "识别文字"])
-    has_extract = _has_any(text, ["extract"]) or _has_any(instruction, ["提取", "抽取"])
-    return has_ocr and has_extract
+def _is_ocr_request(text: str, instruction: str) -> bool:
+    return _has_any(text, ["ocr"]) or _has_any(instruction, ["OCR", "扫描", "识别文字", "小票"])
 
 
 def _is_merge_then_format(text: str, instruction: str) -> bool:
@@ -276,7 +286,25 @@ def _read_schema(instruction: str) -> list[str]:
 def _is_generate_request(text: str, instruction: str) -> bool:
     return _has_any(text, ["generate", "create", "write a", "produce"]) or _has_any(
         instruction,
-        ["生成", "创建", "写一份", "做一份", "出一份", "帮我写", "撰写", "编写", "起草"],
+        [
+            "生成",
+            "创建",
+            "写一份",
+            "做一份",
+            "出一份",
+            "帮我写",
+            "撰写",
+            "编写",
+            "起草",
+            "鐢熸垚",
+            "鍒涘缓",
+            "鍐欎竴浠?",
+            "鍋氫竴浠?",
+            "鍑轰竴浠?",
+            "甯垜鍐?",
+            "鎾板啓",
+            "缂栧啓",
+        ],
     )
 
 
@@ -308,6 +336,8 @@ def _detect_output_format(instruction: str) -> str:
     text = instruction.lower()
     if "pdf" in text:
         return ".pdf"
+    if "markdown" in text or re.search(r"\bmd\b", text):
+        return ".md"
     if "excel" in text or "xlsx" in text or "表格" in instruction or "汇总表" in instruction:
         return ".xlsx"
     if "txt" in text or "纯文本" in instruction:

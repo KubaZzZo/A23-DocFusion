@@ -8,6 +8,7 @@ from config import MAX_UPLOAD_SIZE
 from core.article_workflow import ArticleWorkflow
 from core.document_workflow import DocumentWorkflow
 from core.entity_workflow import EntityWorkflow
+from core.fusion_workflow import FusionWorkflow
 from core.statistics_workflow import StatisticsWorkflow
 from core.template_workflow import TemplateWorkflow
 from core.workflow_errors import WorkflowNotFoundError, WorkflowValidationError
@@ -20,6 +21,7 @@ document_workflow = DocumentWorkflow()
 entity_workflow = EntityWorkflow()
 template_workflow = TemplateWorkflow()
 article_workflow = ArticleWorkflow()
+fusion_workflow = FusionWorkflow()
 statistics_workflow = StatisticsWorkflow()
 
 
@@ -31,6 +33,14 @@ class CommandRequest(BaseModel):
 class FillRequest(BaseModel):
     template_id: int
     document_ids: list[int] = Field(default_factory=list)
+
+
+class ArticlesRequest(BaseModel):
+    articles: list[dict] = Field(default_factory=list)
+
+
+class FusionReportRequest(BaseModel):
+    rows: list[dict] | None = None
 
 
 class PageParams(BaseModel):
@@ -148,6 +158,21 @@ async def export_entities(fmt: str = "csv", doc_id: int = None, keyword: str = N
 
 # --- 模板填写 ---
 
+@router.get("/fusion/cross-document", tags=["数据融合"], summary="查询跨文档实体关联")
+async def list_cross_document_entities(min_documents: int = 2, limit: int = 100):
+    return fusion_workflow.list_cross_document_entities(min_documents=min_documents, limit=limit)
+
+
+@router.post("/fusion/export", tags=["数据融合"], summary="导出融合报告")
+async def export_fusion_report(req: FusionReportRequest):
+    export = fusion_workflow.export_report(req.rows)
+    return StreamingResponse(
+        io.BytesIO(export.content),
+        media_type=export.media_type,
+        headers={"Content-Disposition": f"attachment; filename={export.filename}"},
+    )
+
+
 @router.post("/templates/upload", tags=["模板填写"], summary="上传模板")
 async def upload_template(file: UploadFile = File(...)):
     """上传模板表格文件，自动分析待填写字段"""
@@ -204,6 +229,16 @@ async def get_article(article_id: int):
         return article_workflow.get_article(article_id)
     except (WorkflowNotFoundError, WorkflowValidationError) as e:
         _raise_http_error(e)
+
+
+@router.post("/articles/store", tags=["新闻爬虫"], summary="入库爬取文章")
+async def store_articles(req: ArticlesRequest):
+    return article_workflow.store_articles(req.articles)
+
+
+@router.post("/articles/generate-documents", tags=["新闻爬虫"], summary="生成爬取文章测试文档")
+async def generate_article_documents(req: ArticlesRequest):
+    return article_workflow.generate_documents(req.articles)
 
 
 # --- 工作流串联 (三个模块的端到端流程) ---

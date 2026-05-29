@@ -61,7 +61,11 @@ def _run_agent_step(args: dict[str, Any], workspace: Path) -> dict[str, Any]:
     if not instruction:
         raise ToolError("agent-generate requires 'instruction' in args")
 
-    result = run_codex_agent(str(workspace), instruction)
+    result = run_codex_agent(
+        str(workspace),
+        instruction,
+        on_output=lambda stream, line: _log(workspace / "logs" / "steps.jsonl", "agent_output", stream=stream, line=line),
+    )
     if not result.get("success"):
         raise ToolError(result.get("message", "Agent execution failed"))
     return {
